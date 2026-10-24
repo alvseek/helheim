@@ -28,7 +28,14 @@
     </details>
 
     <section class="tree">
-      {{ render(call.payload) }}
+      {% if too_big %}
+        <p class="notice">
+          This response is larger than the render limit, so the tree is not expanded.
+          The raw envelope below is the whole of it.
+        </p>
+      {% else %}
+        {{ render(call.payload) }}
+      {% endif %}
     </section>
 
     <details class="raw">

@@ -119,3 +119,29 @@ def test_an_unknown_server_is_a_404(tmp_path: Path, monkeypatch) -> None:
     client = TestClient(create_app(load_settings()))
     assert client.get("/s/nowhere").status_code == 404
     assert client.get("/calls/999").status_code == 404
+
+
+def test_a_response_over_the_render_limit_is_not_expanded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import helheim.app as app_module
+
+    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
+    monkeypatch.setattr(app_module, "RENDER_LIMIT_BYTES", 10)
+    app = app_module.create_app(load_settings())
+    client = TestClient(app)
+    call_id = app.state.store.insert(
+        CallRecord(
+            server="munnin",
+            tool="awaken",
+            arguments={},
+            response_text="x" * 200,
+            payload={"a": {"b": 1}},
+            envelope={"content": []},
+            duration_ms=3,
+        )
+    )
+    response = client.get(f"/calls/{call_id}")
+    assert response.status_code == 200
+    assert "larger than the render limit" in response.text
+    assert "<details" in response.text  # the raw envelope is still reachable

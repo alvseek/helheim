@@ -22,6 +22,11 @@ from .store import CallRecord, Store
 
 PACKAGE_DIR = Path(__file__).parent
 
+#: Above this size the page shows a summary and the raw envelope instead of a
+#: fully expanded tree, because a multi-megabyte DOM is slower than the call it
+#: describes.
+RENDER_LIMIT_BYTES = 2 * 1024 * 1024
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
@@ -212,7 +217,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         found = app.state.store.get(call_id)
         if found is None:
             raise HTTPException(status_code=404, detail="no such call")
-        return templates.TemplateResponse(request, "call.html", {"call": found})
+        return templates.TemplateResponse(
+            request,
+            "call.html",
+            {"call": found, "too_big": found["res_bytes"] > RENDER_LIMIT_BYTES},
+        )
 
     @app.get("/calls/{call_id}/replay", response_class=HTMLResponse)
     async def replay(call_id: int, request: Request):
