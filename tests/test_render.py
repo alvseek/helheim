@@ -76,15 +76,6 @@ def test_a_call_renders_as_a_tree(tmp_path: Path, monkeypatch) -> None:
     assert "one" in body and "two" in body
 
 
-def test_a_server_page_offers_the_quick_calls(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
-    client = TestClient(create_app(load_settings()))
-    response = client.get("/s/munnin")
-    assert response.status_code == 200
-    assert "awaken an agent" in response.text
-    assert "/s/munnin/t/awaken?domain=software-architect" in response.text
-
-
 def test_a_form_takes_its_values_from_the_query(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     app = create_app(load_settings())

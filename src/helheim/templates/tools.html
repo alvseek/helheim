@@ -22,14 +22,6 @@
 
     <div class="subtle" style="margin-bottom:10px">{{ server.url }}</div>
 
-    {% if quick %}
-      <section class="quick">
-        {% for item in quick %}
-          <a class="button" href="{{ item.href }}">{{ item.label }}</a>
-        {% endfor %}
-      </section>
-    {% endif %}
-
     <section class="servers">
       {% for tool in tools %}
         <article class="server">
