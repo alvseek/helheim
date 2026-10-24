@@ -19,6 +19,7 @@ helheim = "helheim.__main__:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -33,3 +34,9 @@ testpaths = ["tests"]
 markers = [
     "integration: reaches a real MCP server and needs a stored token",
 ]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

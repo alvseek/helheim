@@ -60,7 +60,7 @@ class Token:
         return asdict(self)
 
     @classmethod
-    def from_json(cls, raw: dict) -> "Token":
+    def from_json(cls, raw: dict) -> Token:
         return cls(
             access_token=raw.get("access_token", ""),
             refresh_token=raw.get("refresh_token", ""),

@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,16 +57,29 @@ class Store:
         self.path = path
         self.max_bytes = max_bytes
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.executescript(SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _session(self) -> Iterator[sqlite3.Connection]:
+        """One connection per operation, closed on the way out.
+
+        ``with sqlite3.connect(...)`` commits but never closes, which leaks a
+        handle per call once FastAPI starts serving from its threadpool.
+        """
         conn = sqlite3.connect(self.path, timeout=10.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def insert(self, record: CallRecord) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute(
                 """
                 insert into calls (at, server, tool, args_json, response_text,
@@ -102,7 +117,7 @@ class Store:
             excess -= int(row["res_bytes"])
 
     def list(self, limit: int = 200) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 """
                 select id, at, server, tool, res_bytes, duration_ms, outcome
@@ -113,7 +128,7 @@ class Store:
         return [dict(row) for row in rows]
 
     def get(self, call_id: int) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute("select * from calls where id = ?", (call_id,)).fetchone()
         if row is None:
             return None
@@ -124,7 +139,7 @@ class Store:
         return found
 
     def total_bytes(self) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             return int(
                 conn.execute("select coalesce(sum(res_bytes), 0) from calls").fetchone()[0]
             )
