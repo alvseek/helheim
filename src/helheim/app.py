@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -26,6 +27,34 @@ PACKAGE_DIR = Path(__file__).parent
 #: fully expanded tree, because a multi-megabyte DOM is slower than the call it
 #: describes.
 RENDER_LIMIT_BYTES = 2 * 1024 * 1024
+
+#: The calls a fleet agent actually makes, offered as one click. Without these the
+#: dashboard makes you remember a tool name before you can look at anything.
+QUICK_CALLS: dict[str, list[tuple[str, str, dict[str, str]]]] = {
+    "munnin": [
+        ("awaken", "awaken an agent", {"domain": "software-architect"}),
+        ("list_procedures", "list procedures", {}),
+        (
+            "read_procedure",
+            "read awaken-agent",
+            {"name": "awaken-agent", "argument": "software-architect"},
+        ),
+        ("list_agents", "list agents", {}),
+    ],
+    "hermod": [
+        ("awaken_coder", "awaken a coder", {"domain": "software-architect"}),
+        ("list_procedures", "list procedures", {}),
+        (
+            "read_procedure",
+            "read awaken-coder",
+            {"name": "awaken-coder", "argument": "software-architect"},
+        ),
+    ],
+    "einherjar": [
+        ("list_procedures", "list procedures", {}),
+        ("list_resources", "list templates", {}),
+    ],
+}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -116,6 +145,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/s/{name}", response_class=HTMLResponse)
     async def server_page(name: str, request: Request):
         server = need_server(name)
+        quick = [
+            {
+                "label": label,
+                "href": f"/s/{name}/t/{tool}"
+                + (f"?{urlencode(preset)}" if preset else ""),
+            }
+            for tool, label, preset in QUICK_CALLS.get(name, [])
+        ]
         try:
             tools = await load_tools(server)
         except AuthError as exc:
@@ -126,12 +163,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "tools.html",
-                {"server": server, "tools": tools, "status": "ok"},
+                {"server": server, "tools": tools, "status": "ok", "quick": quick},
             )
         return templates.TemplateResponse(
             request,
             "tools.html",
-            {"server": server, "tools": [], "status": status},
+            {"server": server, "tools": [], "status": status, "quick": quick},
             status_code=200,
         )
 
@@ -147,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         found = next((item for item in tools if item.name == tool), None)
         if found is None:
             raise HTTPException(status_code=404, detail=f"{name} has no tool called {tool}")
+        preset = {key: value for key, value in request.query_params.items()}
         return templates.TemplateResponse(
             request,
             "form.html",
@@ -154,7 +192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "server": server,
                 "tool": found,
                 "fields": fields_from_schema(found.input_schema),
-                "values": {},
+                "values": preset,
                 "errors": [],
             },
         )

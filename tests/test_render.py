@@ -76,6 +76,58 @@ def test_a_call_renders_as_a_tree(tmp_path: Path, monkeypatch) -> None:
     assert "one" in body and "two" in body
 
 
+def test_a_server_page_offers_the_quick_calls(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
+    client = TestClient(create_app(load_settings()))
+    response = client.get("/s/munnin")
+    assert response.status_code == 200
+    assert "awaken an agent" in response.text
+    assert "/s/munnin/t/awaken?domain=software-architect" in response.text
+
+
+def test_a_form_takes_its_values_from_the_query(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
+    app = create_app(load_settings())
+
+    class FakeAuth:
+        def status(self, server):
+            return "ok"
+
+        def token(self, server):
+            return "t"
+
+        def begin(self, server):
+            return "/"
+
+        def complete(self, code, state):
+            return "munnin"
+
+    app.state.auth = FakeAuth()
+    app.state.fields_override = None
+
+    async def fake_tools(server, token):
+        from helheim.mcp_client import ToolInfo
+
+        return [
+            ToolInfo(
+                name="awaken",
+                description="assemble a payload",
+                input_schema={
+                    "type": "object",
+                    "properties": {"domain": {"type": "string"}},
+                    "required": ["domain"],
+                },
+                annotations={},
+            )
+        ]
+
+    monkeypatch.setattr("helheim.app.mcp_client.list_tools", fake_tools)
+    client = TestClient(app)
+    response = client.get("/s/munnin/t/awaken?domain=software-architect")
+    assert response.status_code == 200
+    assert 'value="software-architect"' in response.text
+
+
 def test_history_lists_calls(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     app = create_app(load_settings())
@@ -103,7 +155,7 @@ def test_a_server_without_a_token_says_missing(tmp_path: Path, monkeypatch) -> N
     response = client.get("/s/munnin")
     assert response.status_code == 200
     assert "missing" in response.text
-    assert "awaken" not in response.text
+    assert 'href="/s/munnin/t/awaken"' not in response.text
 
 
 def test_a_tool_form_without_a_token_explains_itself(tmp_path: Path, monkeypatch) -> None:
