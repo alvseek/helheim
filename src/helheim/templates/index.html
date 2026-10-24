@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Helheim</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="bar">
+    <h1>Helheim</h1>
+    <span class="subtle">what a tool returns, before an agent sees it</span>
+  </header>
+
+  <main>
+    {% if not client_configured %}
+      <p class="notice">
+        No client is configured. Create a Native application in the tenant and set
+        <code>app.client_id</code> in <code>~/.config/helheim/config.toml</code>.
+      </p>
+    {% endif %}
+
+    <section class="servers">
+      {% for row in rows %}
+        <article class="server">
+          <div class="server-head">
+            <strong>{{ row.server.name }}</strong>
+            <span class="status status-{{ row.status }}">{{ row.status }}</span>
+          </div>
+          <div class="subtle">{{ row.server.url }}</div>
+          <div class="subtle">resource {{ row.server.resource }}</div>
+        </article>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

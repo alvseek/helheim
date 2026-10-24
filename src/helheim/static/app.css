@@ -1,0 +1,76 @@
+:root {
+  --bg: #14161a;
+  --panel: #1c2026;
+  --line: #2a3038;
+  --text: #d8dee6;
+  --subtle: #8b95a3;
+  --accent: #6aa8ff;
+  --warn: #e0a33e;
+  --bad: #e06c6c;
+  --good: #63c48a;
+  --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+}
+
+.bar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.bar h1 { margin: 0; font-size: 16px; letter-spacing: 0.02em; }
+
+main { padding: 20px; max-width: 1100px; }
+
+.subtle { color: var(--subtle); font-size: 12px; }
+
+.notice {
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--warn);
+  background: rgba(224, 163, 62, 0.06);
+}
+
+.servers { display: grid; gap: 12px; }
+
+.server {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--panel);
+}
+
+.server-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.status {
+  font: 11px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--subtle);
+}
+
+.status-ok { color: var(--good); border-color: var(--good); }
+.status-expired, .status-missing { color: var(--warn); border-color: var(--warn); }
+.status-refused, .status-unavailable { color: var(--bad); border-color: var(--bad); }
+
+code { font-family: var(--mono); font-size: 12px; }
