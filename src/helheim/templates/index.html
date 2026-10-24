@@ -24,11 +24,18 @@
       {% for row in rows %}
         <article class="server">
           <div class="server-head">
-            <strong>{{ row.server.name }}</strong>
+            {% if row.status == "ok" %}
+              <a href="/s/{{ row.server.name }}"><strong>{{ row.server.name }}</strong></a>
+            {% else %}
+              <strong>{{ row.server.name }}</strong>
+            {% endif %}
             <span class="status status-{{ row.status }}">{{ row.status }}</span>
           </div>
           <div class="subtle">{{ row.server.url }}</div>
           <div class="subtle">resource {{ row.server.resource }}</div>
+          {% if client_configured and row.status in ("missing", "expired") %}
+            <p><a class="button" href="/auth/{{ row.server.name }}/start">Connect</a></p>
+          {% endif %}
         </article>
       {% endfor %}
     </section>

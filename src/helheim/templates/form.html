@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ tool.name }} · {{ server.name }} · Helheim</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="bar">
+    <h1><a href="/">Helheim</a></h1>
+    <span class="subtle"><a href="/s/{{ server.name }}">{{ server.name }}</a> · {{ tool.name }}</span>
+  </header>
+
+  <main>
+    {% if replay_of %}
+      <p class="notice quiet">Replaying call #{{ replay_of }}. Sending it again will make a new call.</p>
+    {% endif %}
+
+    {% if tool.destructive %}
+      <p class="notice">This tool writes. Nothing will stop it.</p>
+    {% endif %}
+
+    <p class="subtle">{{ tool.description }}</p>
+
+    {% if errors %}
+      <ul class="errors">
+        {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+
+    <form method="post" class="form">
+      {% for field in fields %}
+        <div class="field">
+          <label for="f-{{ field.name }}">
+            {{ field.name }}{% if field.required %} <span class="req">*</span>{% endif %}
+          </label>
+
+          {% if field.kind == "enum" %}
+            <select id="f-{{ field.name }}" name="{{ field.name }}">
+              <option value=""></option>
+              {% for choice in field.choices %}
+                <option value="{{ choice }}" {% if values.get(field.name) == choice %}selected{% endif %}>{{ choice }}</option>
+              {% endfor %}
+            </select>
+          {% elif field.kind == "checkbox" %}
+            <input id="f-{{ field.name }}" type="checkbox" name="{{ field.name }}" {% if values.get(field.name) %}checked{% endif %}>
+          {% elif field.kind == "number" %}
+            <input id="f-{{ field.name }}" type="number" step="any" name="{{ field.name }}" value="{{ values.get(field.name, '') }}">
+          {% elif field.kind == "json" %}
+            <textarea id="f-{{ field.name }}" name="{{ field.name }}" rows="4" spellcheck="false">{{ values.get(field.name, '') }}</textarea>
+          {% else %}
+            <input id="f-{{ field.name }}" type="text" name="{{ field.name }}" value="{{ values.get(field.name, '') }}">
+          {% endif %}
+
+          {% if field.description %}<div class="subtle">{{ field.description }}</div>{% endif %}
+        </div>
+      {% endfor %}
+
+      {% if not fields %}<p class="subtle">This tool takes no arguments.</p>{% endif %}
+
+      <button type="submit" class="button">Send</button>
+    </form>
+  </main>
+</body>
+</html>

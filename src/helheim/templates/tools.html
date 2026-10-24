@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ server.name }} · Helheim</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="bar">
+    <h1><a href="/">Helheim</a></h1>
+    <span class="subtle">{{ server.name }} · {{ tools|length }} tools · <a href="/history">history</a></span>
+  </header>
+
+  <main>
+    {% if status != "ok" %}
+      <p class="notice">
+        {{ server.name }} is <strong>{{ status }}</strong>.
+        {% if status in ("missing", "expired") %}<a href="/auth/{{ server.name }}/start">Connect</a>{% endif %}
+      </p>
+    {% endif %}
+
+    <div class="subtle" style="margin-bottom:10px">{{ server.url }}</div>
+
+    <section class="servers">
+      {% for tool in tools %}
+        <article class="server">
+          <div class="server-head">
+            <a href="/s/{{ server.name }}/t/{{ tool.name }}"><strong>{{ tool.name }}</strong></a>
+            {% if tool.destructive %}<span class="badge badge-write">writes</span>{% endif %}
+          </div>
+          <div class="subtle">{{ tool.description }}</div>
+        </article>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>History · Helheim</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="bar">
+    <h1><a href="/">Helheim</a></h1>
+    <span class="subtle">{{ calls|length }} calls · {{ total_bytes }} of {{ max_bytes }} bytes stored</span>
+  </header>
+
+  <main>
+    {% if not calls %}
+      <p class="subtle">No calls yet.</p>
+    {% else %}
+      <table class="history">
+        <thead>
+          <tr><th>#</th><th>when</th><th>server</th><th>tool</th><th>bytes</th><th>ms</th><th>outcome</th></tr>
+        </thead>
+        <tbody>
+          {% for call in calls %}
+            <tr>
+              <td><a href="/calls/{{ call.id }}">{{ call.id }}</a></td>
+              <td class="subtle">{{ call.at }}</td>
+              <td>{{ call.server }}</td>
+              <td>{{ call.tool }}</td>
+              <td>{{ call.res_bytes }}</td>
+              <td>{{ call.duration_ms }}</td>
+              <td>{{ call.outcome }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </main>
+</body>
+</html>

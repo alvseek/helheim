@@ -1,0 +1,26 @@
+{% macro render(value, key=None, depth=0) -%}
+  {% if value is mapping %}
+    <details class="node"{% if depth < 2 %} open{% endif %}>
+      <summary><span class="k">{{ key if key is not none else "result" }}</span> <span class="t">{ {{ value|length }} }</span></summary>
+      <div class="children">
+        {% for child_key, child in value.items() %}
+          {{ render(child, child_key, depth + 1) }}
+        {% endfor %}
+      </div>
+    </details>
+  {% elif value is iterable and value is not string and value is not mapping %}
+    <details class="node"{% if depth < 2 %} open{% endif %}>
+      <summary><span class="k">{{ key if key is not none else "result" }}</span> <span class="t">[ {{ value|length }} ]</span></summary>
+      <div class="children">
+        {% for child in value %}
+          {{ render(child, loop.index0, depth + 1) }}
+        {% endfor %}
+      </div>
+    </details>
+  {% else %}
+    <div class="leaf">
+      <span class="k">{{ key if key is not none else "value" }}</span>
+      <span class="v">{{ "null" if value is none else value|string|truncate(120, true) }}</span>
+    </div>
+  {% endif %}
+{%- endmacro %}

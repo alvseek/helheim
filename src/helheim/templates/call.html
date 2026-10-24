@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ call.tool }} · Helheim</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  {% from "_tree.html" import render %}
+  <header class="bar">
+    <h1><a href="/">Helheim</a></h1>
+    <span class="subtle"><a href="/s/{{ call.server }}">{{ call.server }}</a> · <a href="/s/{{ call.server }}/t/{{ call.tool }}">{{ call.tool }}</a></span>
+  </header>
+
+  <main>
+    <div class="metrics">
+      <span class="metric"><b>{{ call.res_bytes }}</b> bytes</span>
+      <span class="metric"><b>{{ call.duration_ms }}</b> ms</span>
+      <span class="metric"><b>{{ call.outcome }}</b></span>
+      <span class="metric subtle">{{ call.at }}</span>
+      <a class="button" href="/calls/{{ call.id }}/replay">Replay</a>
+    </div>
+
+    <details class="raw">
+      <summary>arguments sent</summary>
+      <pre>{{ call.args_json }}</pre>
+    </details>
+
+    <section class="tree">
+      {{ render(call.payload) }}
+    </section>
+
+    <details class="raw">
+      <summary>raw result envelope</summary>
+      <pre>{{ call.envelope_json }}</pre>
+    </details>
+  </main>
+</body>
+</html>
