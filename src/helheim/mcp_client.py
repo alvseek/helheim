@@ -45,6 +45,38 @@ class ClientError(Exception):
         self.status = status
 
 
+def _root_cause(exc: BaseException) -> BaseException:
+    """Dig through the exception groups the SDK wraps everything in.
+
+    A transport failure arrives as ``ExceptionGroup: unhandled errors in a
+    TaskGroup`` whose message names nothing useful; the answer is one or more
+    levels down.
+    """
+    depth = 0
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions and depth < 10:
+        exc = exc.exceptions[0]
+        depth += 1
+    return exc
+
+
+def _describe(exc: BaseException) -> tuple[str, str]:
+    """The sentence to show, and the status the page should act on."""
+    root = _root_cause(exc)
+    if isinstance(root, httpx2.HTTPStatusError):
+        code = root.response.status_code
+        status = "expired" if code in (401, 403) else "unavailable"
+        return f"HTTP {code} {root.response.reason_phrase}", status
+    error = getattr(root, "error", None)
+    rpc_code = getattr(error, "code", None)
+    if rpc_code is not None:
+        return (
+            f"server answered with JSON-RPC error {rpc_code}: "
+            f"{getattr(error, 'message', '')}",
+            "unavailable",
+        )
+    return f"{type(root).__name__}: {root}", "unavailable"
+
+
 @dataclass
 class ToolInfo:
     name: str
@@ -122,11 +154,13 @@ async def _run(server: Server, token: str, work):
                     await session.initialize()
                     return await work(session)
     except httpx2.HTTPError as exc:
-        raise ClientError(f"{server.name} could not be reached: {exc}") from exc
+        detail, status = _describe(exc)
+        raise ClientError(f"{server.name}: {detail}", status) from exc
     except ClientError:
         raise
     except Exception as exc:  # the SDK raises its own types; all mean "this failed"
-        raise ClientError(f"{server.name} failed: {exc}") from exc
+        detail, status = _describe(exc)
+        raise ClientError(f"{server.name}: {detail}", status) from exc
 
 
 async def list_tools(server: Server, token: str) -> list[ToolInfo]:
