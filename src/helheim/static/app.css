@@ -148,6 +148,20 @@ textarea { font-family: var(--mono); font-size: 12px; }
 .tree .k { color: var(--subtle); }
 .tree .v { color: var(--text); word-break: break-word; }
 .tree .t { color: var(--line); }
+.tree details.long > summary { display: flex; gap: 8px; }
+.tree details.long > summary .v { color: var(--text); }
+.tree details.long > pre.full {
+  margin: 4px 0 6px 16px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow: auto;
+}
 
 details.raw { margin: 12px 0; }
 details.raw summary { cursor: pointer; color: var(--subtle); font-size: 12px; }

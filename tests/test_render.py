@@ -76,6 +76,31 @@ def test_a_call_renders_as_a_tree(tmp_path: Path, monkeypatch) -> None:
     assert "one" in body and "two" in body
 
 
+def test_a_long_value_is_expandable_in_place(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
+    app = create_app(load_settings())
+    client = TestClient(app)
+
+    long_text = "the whole body of the record " * 12  # 360 characters
+    call_id = app.state.store.insert(
+        CallRecord(
+            server="munnin",
+            tool="awaken",
+            arguments={},
+            response_text="ok",
+            payload={"content": long_text, "tiny": "short"},
+            envelope={"content": []},
+            duration_ms=5,
+        )
+    )
+
+    body = client.get(f"/calls/{call_id}").text
+    assert 'class="node long"' in body
+    assert long_text in body  # the full value, not only the preview
+    assert f"{len(long_text)} chars" in body
+    assert '<div class="leaf">' in body and "short" in body  # short values stay leaves
+
+
 def test_a_form_takes_its_values_from_the_query(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     app = create_app(load_settings())

@@ -18,9 +18,21 @@
       </div>
     </details>
   {% else %}
-    <div class="leaf">
-      <span class="k">{{ key if key is not none else "value" }}</span>
-      <span class="v">{{ "null" if value is none else value|string|truncate(120, true) }}</span>
-    </div>
+    {% set text = "null" if value is none else value|string %}
+    {% if text|length > 120 %}
+      <details class="node long">
+        <summary>
+          <span class="k">{{ key if key is not none else "value" }}</span>
+          <span class="v">{{ text[:120] }}…</span>
+          <span class="t">{{ text|length }} chars</span>
+        </summary>
+        <pre class="full">{{ text }}</pre>
+      </details>
+    {% else %}
+      <div class="leaf">
+        <span class="k">{{ key if key is not none else "value" }}</span>
+        <span class="v">{{ text }}</span>
+      </div>
+    {% endif %}
   {% endif %}
 {%- endmacro %}
