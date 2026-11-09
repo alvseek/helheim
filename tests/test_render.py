@@ -142,6 +142,76 @@ def test_a_form_takes_its_values_from_the_query(tmp_path: Path, monkeypatch) -> 
     response = client.get("/s/munnin/t/awaken?domain=software-architect")
     assert response.status_code == 200
     assert 'value="software-architect"' in response.text
+    # Send disables itself and spins, so a second press cannot run the tool twice.
+    assert "data-pending" in response.text
+    assert 'src="/static/app.js"' in response.text
+
+
+def test_a_form_names_its_own_post_target(tmp_path: Path, monkeypatch) -> None:
+    """Replay renders this form on /calls/{id}/replay, a GET-only page, so a form that
+    relied on the page's own URL answered Send with 405 Method Not Allowed."""
+    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
+    app = create_app(load_settings())
+
+    class FakeAuth:
+        def status(self, server):
+            return "ok"
+
+        def token(self, server):
+            return "t"
+
+        def begin(self, server):
+            return "/"
+
+        def complete(self, code, state):
+            return "munnin"
+
+    app.state.auth = FakeAuth()
+    app.state.fields_override = None
+
+    async def fake_tools(server, token):
+        from helheim.mcp_client import ToolInfo
+
+        return [
+            ToolInfo(
+                name="awaken",
+                description="assemble a payload",
+                input_schema={
+                    "type": "object",
+                    "properties": {"domain": {"type": "string"}},
+                    "required": ["domain"],
+                },
+                annotations={},
+            )
+        ]
+
+    async def fake_call(server, token, name, arguments):
+        from helheim.mcp_client import CallOutcome
+
+        return CallOutcome(payload={}, envelope={}, text="ok", is_error=False, duration_ms=3)
+
+    monkeypatch.setattr("helheim.app.mcp_client.list_tools", fake_tools)
+    monkeypatch.setattr("helheim.app.mcp_client.call_tool", fake_call)
+
+    call_id = app.state.store.insert(
+        CallRecord(
+            server="munnin",
+            tool="awaken",
+            arguments={"domain": "software-architect"},
+            response_text="ok",
+            payload={},
+            envelope={},
+            duration_ms=5,
+        )
+    )
+    client = TestClient(app)
+
+    page = client.get(f"/calls/{call_id}/replay")
+    assert page.status_code == 200
+    assert 'action="/s/munnin/t/awaken"' in page.text
+
+    sent = client.post("/s/munnin/t/awaken", data={"domain": "software-architect"}, follow_redirects=False)
+    assert sent.status_code == 303
 
 
 def test_history_lists_calls(tmp_path: Path, monkeypatch) -> None:

@@ -29,7 +29,7 @@
       </ul>
     {% endif %}
 
-    <form method="post" class="form">
+    <form method="post" action="/s/{{ server.name }}/t/{{ tool.name }}" class="form" data-pending>
       {% for field in fields %}
         <div class="field">
           <label for="f-{{ field.name }}">
@@ -62,5 +62,6 @@
       <button type="submit" class="button">Send</button>
     </form>
   </main>
+  <script src="/static/app.js"></script>
 </body>
 </html>
