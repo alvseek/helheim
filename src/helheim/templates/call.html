@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  {% from "_tree.html" import render %}
+  {% from "_tree.html" import render with context %}
   <header class="bar">
     <h1><a href="/">Helheim</a></h1>
     <span class="subtle"><a href="/s/{{ call.server }}">{{ call.server }}</a> · <a href="/s/{{ call.server }}/t/{{ call.tool }}">{{ call.tool }}</a></span>
@@ -16,11 +16,17 @@
   <main>
     <div class="metrics">
       <span class="metric"><b>{{ call.res_bytes }}</b> bytes</span>
+      {% if response_tokens is not none %}
+        <span class="metric" data-response-tokens="{{ response_tokens }}"><b>{{ "{:,}".format(response_tokens) }}</b> tokens · {{ counter.encoding_name }}</span>
+      {% else %}
+        <span class="metric">Token count unavailable</span>
+      {% endif %}
       <span class="metric"><b>{{ call.duration_ms }}</b> ms</span>
       <span class="metric"><b>{{ call.outcome }}</b></span>
       <span class="metric subtle">{{ call.at }}</span>
       <a class="button" href="/calls/{{ call.id }}/replay">Replay</a>
     </div>
+    <p class="subtle">Tokens count returned text, not billed usage. Section badges count compact JSON independently and are not additive.</p>
 
     <details class="raw">
       <summary>arguments sent</summary>

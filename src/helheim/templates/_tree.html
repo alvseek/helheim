@@ -1,7 +1,13 @@
 {% macro render(value, key=None, depth=0) -%}
+  {% macro tokens() -%}
+    {% if counter is defined and counter is not none %}
+      {% set count = counter.value(value) %}
+      <span class="tokens" data-tokens="{{ count }}" title="Tokens in this value's compact JSON · {{ counter.encoding_name }}">{{ "{:,}".format(count) }} tokens</span>
+    {% endif %}
+  {%- endmacro %}
   {% if value is mapping %}
     <details class="node"{% if depth < 2 %} open{% endif %}>
-      <summary><span class="k">{{ key if key is not none else "result" }}</span> <span class="t">{ {{ value|length }} }</span></summary>
+      <summary><span class="k">{{ key if key is not none else "result" }}</span> <span class="t">{ {{ value|length }} }</span> {{ tokens() }}</summary>
       <div class="children">
         {% for child_key, child in value.items() %}
           {{ render(child, child_key, depth + 1) }}
@@ -10,7 +16,7 @@
     </details>
   {% elif value is iterable and value is not string and value is not mapping %}
     <details class="node"{% if depth < 2 %} open{% endif %}>
-      <summary><span class="k">{{ key if key is not none else "result" }}</span> <span class="t">[ {{ value|length }} ]</span></summary>
+      <summary><span class="k">{{ key if key is not none else "result" }}</span> <span class="t">[ {{ value|length }} ]</span> {{ tokens() }}</summary>
       <div class="children">
         {% for child in value %}
           {{ render(child, loop.index0, depth + 1) }}
@@ -25,6 +31,7 @@
           <span class="k">{{ key if key is not none else "value" }}</span>
           <span class="v">{{ text[:120] }}…</span>
           <span class="t">{{ text|length }} chars</span>
+          {{ tokens() }}
         </summary>
         <pre class="full">{{ text }}</pre>
       </details>

@@ -167,6 +167,12 @@ textarea { font-family: var(--mono); font-size: 12px; }
 .tree .k { color: var(--subtle); }
 .tree .v { color: var(--text); word-break: break-word; }
 .tree .t { color: var(--line); }
+.tree .tokens {
+  color: var(--subtle);
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 8px;
+}
 .tree details.long > summary { display: flex; gap: 8px; }
 .tree details.long > summary .v { color: var(--text); }
 .tree details.long > pre.full {

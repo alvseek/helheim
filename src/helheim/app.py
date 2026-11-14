@@ -13,12 +13,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from requests.exceptions import RequestException
 
 from . import mcp_client
 from .auth import Auth, AuthError
 from .config import Server, Settings, load_settings
 from .forms import arguments_from_form, fields_from_schema
 from .store import CallRecord, Store
+from .tokens import TokenCounter
 
 PACKAGE_DIR = Path(__file__).parent
 
@@ -218,10 +220,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         found = app.state.store.get(call_id)
         if found is None:
             raise HTTPException(status_code=404, detail="no such call")
+        try:
+            counter = TokenCounter()
+            response_tokens = counter.text(found["response_text"])
+        except (OSError, ValueError, RequestException):
+            # An unavailable vocabulary must not make stored responses unreadable.
+            counter = None
+            response_tokens = None
         return templates.TemplateResponse(
             request,
             "call.html",
-            {"call": found, "too_big": found["res_bytes"] > RENDER_LIMIT_BYTES},
+            {
+                "call": found,
+                "too_big": found["res_bytes"] > RENDER_LIMIT_BYTES,
+                "counter": counter,
+                "response_tokens": response_tokens,
+            },
         )
 
     @app.get("/calls/{call_id}/replay", response_class=HTMLResponse)

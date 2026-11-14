@@ -4,8 +4,8 @@ A local dashboard for calling cloud MCP tools and reading what comes back.
 
 It logs in as you against the authorization server each MCP server names, lists
 that server's tools, builds a form from each tool's own input schema, sends the
-call, and renders the answer as a collapsible tree with its byte size and
-duration. Every call is kept locally so it can be reopened or replayed.
+call, and renders the answer as a collapsible tree with its byte size, duration and
+token count. Every call is kept locally so it can be reopened or replayed.
 
 Nothing runs on a server, nothing sits in an agent's path, and nothing is read
 from another client's files. It is a Postman for MCP, for one person, on one
@@ -19,6 +19,12 @@ machine.
 - The response rendered as nested `<details>` with its byte size and duration, so
   a 130 KB payload is navigable without JavaScript
 - Every call stored in local SQLite, reopenable, replayable, and capped in bytes
+- Local token counts using tiktoken's `o200k_base`: the total measures the returned
+  text; expandable sections and records measure their compact JSON independently.
+  Counts are not additive or provider-billed conversation usage. Existing history
+  is measured when opened, without changing stored responses. The vocabulary is
+  downloaded and cached on first use; response contents never leave Helheim for
+  counting. If it cannot load, the response stays readable with the count unavailable.
 - Tools that write are labelled. Nothing is blocked.
 
 ## Start it
