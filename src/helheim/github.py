@@ -96,6 +96,10 @@ class GitHub:
         headers, separator, body = output.partition("\n\n")
         status_match = re.match(r"HTTP/\S+\s+(\d{3})", headers)
         if not separator or not status_match:
+            if method != "GET":
+                raise GitUncertain(
+                    "GitHub write response was unavailable; reconcile before retrying"
+                )
             raise GitError(
                 "GitHub response was unavailable; check gh auth status and repository access"
             )

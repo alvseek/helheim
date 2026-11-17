@@ -1,9 +1,11 @@
 import copy
+import hashlib
+import subprocess
 
 import pytest
 from procedure_composer import MemorySource
 
-from helheim.github import GitConflict, GitError, GitUncertain, Repository
+from helheim.github import GitConflict, GitError, GitHub, GitUncertain, Repository
 from helheim.workspaces import Workspaces, WorkspaceStore
 
 BASE = "a" * 40
@@ -135,6 +137,53 @@ def test_commit_success_pr_failure_retries_only_the_pr(tmp_path):
     assert github.calls.count("commit") == 1
 
 
+@pytest.mark.parametrize("failure", ["network", "closed", "ready", "head", "base"])
+def test_postcommit_pr_check_failure_returns_confirmed_save(tmp_path, monkeypatch, failure):
+    workspaces, state, github = setup(tmp_path)
+    save(workspaces, state, "first", "first saved\n")
+    original_pull = github.pull
+    reads = 0
+
+    def pull(number):
+        nonlocal reads
+        reads += 1
+        if reads >= 2:
+            if failure == "network":
+                raise GitError("GitHub did not answer")
+            github.pr.update({
+                "closed": {"state": "closed"},
+                "ready": {"draft": False},
+                "head": {"head": {"ref": "another-branch"}},
+                "base": {"base": {"ref": "another-base"}},
+            }[failure])
+        return original_pull(number)
+
+    monkeypatch.setattr(github, "pull", pull)
+    draft = "second saved\n"
+    result = save(workspaces, state, "second", draft)
+    head = github.head(state["branch"])
+    assert result["status"] == "saved_pr_pending"
+    assert result["head"] == result["workspace"]["head_oid"] == head
+    assert result["source_hash"] == hashlib.sha256(draft.encode()).hexdigest()
+    assert result["sections"]["db"][1]["text"] == draft
+    assert result["validation_errors"] == {"markdown": [], "db": []}
+    assert result["error"] and result["pr_uncertain"] is False
+    assert result["workspace"]["pending_pr"]
+    assert result["workspace"]["pending_action"] is None
+    assert github.sources(head).read("procedures/sections/second.md") == draft.encode()
+    before = list(github.calls)
+    retried = workspaces.retry_pull(state["id"])
+    assert retried["status"] == "saved_pr_pending" and retried["error"]
+    assert github.calls == before  # No commit or PR reuse after the failed check.
+    with pytest.raises(GitError, match="retry its PR"):
+        save(workspaces, state, "first", "not saved\n")
+    if failure == "network":
+        monkeypatch.setattr(github, "pull", original_pull)
+        assert workspaces.retry_pull(state["id"])["status"] == "saved"
+        assert github.head(state["branch"]) == head
+    assert github.calls.count("commit") == 2
+
+
 @pytest.mark.parametrize("change", [{"state": "closed"}, {"draft": False}])
 def test_closed_or_ready_pr_is_not_silently_reused(tmp_path, change):
     workspaces, state, github = setup(tmp_path)
@@ -159,6 +208,44 @@ def test_uncertain_commit_is_reconciled_without_recommitting_or_storing_drafts(t
     assert reconciled["pending_pr"] and reconciled["pending_action"] is None
     assert workspaces.retry_pull(state["id"])["status"] == "saved"
     assert github.calls.count("commit") == 1
+
+
+@pytest.mark.parametrize("operation", ["create_branch", "commit"])
+def test_lost_response_retains_intent_after_remote_write(tmp_path, monkeypatch, operation):
+    workspaces, state, github = setup(tmp_path)
+    second = workspaces.preview(state["id"], "flow", "db", "second")
+    original = getattr(github, operation)
+    adapter = GitHub(github.repository, runner=lambda *args, **kwargs:
+                     subprocess.CompletedProcess([], 1, "", "connection reset"))
+
+    def lose_response(*args):
+        original(*args)
+        adapter.request("graphql", method="POST", data={})
+
+    monkeypatch.setattr(github, operation, lose_response)
+    draft = "saved with lost response\n"
+    with pytest.raises(GitUncertain, match="reconcile"):
+        save(workspaces, state, "first", draft)
+    pending = workspaces.store.get(state["id"])
+    assert pending["pending_action"] == operation
+    assert pending["pending_save"]["new_hash"] == hashlib.sha256(draft.encode()).hexdigest()
+    assert draft not in str(pending)
+    before = list(github.calls)
+    with pytest.raises(GitUncertain, match="prior save"):
+        workspaces.save(state["id"], "flow", "db", "second", "refused\n",
+                        second["head"], second["original"].source_hash)
+    assert github.calls == before
+    if operation == "commit":
+        reconciled = workspaces.reconcile(state["id"])
+        assert reconciled["pending_pr"] and reconciled["pending_action"] is None
+        assert workspaces.retry_pull(state["id"])["status"] == "saved"
+        assert github.calls.count("commit") == 1
+    else:
+        with pytest.raises(GitUncertain, match="never adopt or reset"):
+            workspaces.reconcile(state["id"])
+        assert workspaces.store.get(state["id"]) == pending
+        assert github.head(state["branch"]) == BASE
+        assert github.calls == ["branch"]
 
 
 def test_branch_collision_is_never_adopted_or_reset(tmp_path):

@@ -230,8 +230,7 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         )
 
     @app.post("/memory-edit/{identity}/close")
-    def close_memory(identity: str, request: Request):
+    async def close_memory(identity: str, request: Request):
         editor = app.state.memory_editor
-        editor.get(identity, request.state.editor_owner)
-        del editor.sessions[identity]
+        editor.close(identity, request.state.editor_owner)
         return {"closed": True}

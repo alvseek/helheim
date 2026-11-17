@@ -442,7 +442,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "mcp", specifier = ">=1.2" },
-    { name = "procedure-composer", git = "https://github.com/alvseek/agent-memory-system.git?subdirectory=packages%2Fprocedure-composer&rev=b6bf1f1b04fcc0c9c6a5ae7245455606cb33e496" },
+    { name = "procedure-composer", git = "https://github.com/alvseek/agent-memory-system.git?subdirectory=packages%2Fprocedure-composer&rev=6412c4dc47606f1d63807d33d4aa14cce013231d" },
     { name = "pydantic", specifier = ">=2" },
     { name = "tiktoken", specifier = ">=0.14,<0.15" },
     { name = "uvicorn", specifier = ">=0.30" },
@@ -778,7 +778,7 @@ wheels = [
 [[package]]
 name = "procedure-composer"
 version = "0.1.0"
-source = { git = "https://github.com/alvseek/agent-memory-system.git?subdirectory=packages%2Fprocedure-composer&rev=b6bf1f1b04fcc0c9c6a5ae7245455606cb33e496#b6bf1f1b04fcc0c9c6a5ae7245455606cb33e496" }
+source = { git = "https://github.com/alvseek/agent-memory-system.git?subdirectory=packages%2Fprocedure-composer&rev=6412c4dc47606f1d63807d33d4aa14cce013231d#6412c4dc47606f1d63807d33d4aa14cce013231d" }
 
 [[package]]
 name = "pycparser"

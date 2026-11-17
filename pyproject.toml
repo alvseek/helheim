@@ -21,7 +21,7 @@ helheim = "helheim.__main__:main"
 
 [tool.uv.sources]
 # Pin the installed renderer independently of the source branch being edited.
-procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git", rev = "b6bf1f1b04fcc0c9c6a5ae7245455606cb33e496", subdirectory = "packages/procedure-composer" }
+procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git", rev = "6412c4dc47606f1d63807d33d4aa14cce013231d", subdirectory = "packages/procedure-composer" }
 
 [dependency-groups]
 dev = [

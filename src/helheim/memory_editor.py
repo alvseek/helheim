@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,6 +12,8 @@ from typing import Any
 from .mcp_client import ToolInfo
 
 EDITABLE = ("title", "content_summary", "tags", "project")
+MAX_EDITOR_SESSIONS = 32
+EDITOR_IDLE_SECONDS = 30 * 60
 
 
 class MemoryEditError(ValueError):
@@ -59,13 +62,66 @@ class Editing:
     body: str
     metadata: dict[str, Any]
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_used: float = 0
+    expiry: asyncio.TimerHandle | None = field(default=None, repr=False)
 
 
 class MemoryEditor:
-    def __init__(self, list_tools, call_tool):
+    def __init__(self, list_tools, call_tool, *, max_sessions=MAX_EDITOR_SESSIONS,
+                 idle_seconds=EDITOR_IDLE_SECONDS, clock=time.monotonic):
+        if max_sessions < 1 or idle_seconds <= 0:
+            raise ValueError("editor capacity and idle lifetime must be positive")
         self.list_tools = list_tools
         self.call_tool = call_tool
         self.sessions: dict[str, Editing] = {}
+        self.max_sessions = max_sessions
+        self.idle_seconds = idle_seconds
+        self.clock = clock
+
+    def _release(self, identity):
+        editing = self.sessions.pop(identity, None)
+        if editing is not None and editing.expiry is not None:
+            editing.expiry.cancel()
+
+    def _expire(self, identity):
+        editing = self.sessions.get(identity)
+        if editing is None:
+            return
+        remaining = self.idle_seconds - (self.clock() - editing.last_used)
+        if not editing.lock.locked() and remaining <= 0:
+            self._release(identity)
+        else:
+            editing.expiry = asyncio.get_running_loop().call_later(
+                max(remaining, self.idle_seconds if editing.lock.locked() else 0),
+                self._expire, identity,
+            )
+
+    def _touch(self, editing):
+        editing.last_used = self.clock()
+        if editing.expiry is not None:
+            editing.expiry.cancel()
+        editing.expiry = asyncio.get_running_loop().call_later(
+            self.idle_seconds, self._expire, editing.id,
+        )
+
+    def _make_room(self):
+        for identity, editing in list(self.sessions.items()):
+            if (not editing.lock.locked()
+                    and self.clock() - editing.last_used >= self.idle_seconds):
+                self._release(identity)
+        if len(self.sessions) >= self.max_sessions:
+            available = [item for item in self.sessions.values() if not item.lock.locked()]
+            if not available:
+                raise MemoryEditError(
+                    "all editor sessions are busy; try opening again after saving"
+                )
+            self._release(min(available, key=lambda item: item.last_used).id)
+
+    def close(self, identity, owner):
+        editing = self.get(identity, owner)
+        if editing.lock.locked():
+            raise MemoryEditError("editor is saving; wait before closing")
+        self._release(identity)
 
     async def call(self, server, name, arguments):
         # This path deliberately does not call Store.insert or the inspector route.
@@ -160,18 +216,35 @@ class MemoryEditor:
                 or hashlib.sha256(body.encode("utf-8")).hexdigest() != expected_body["sha256"]):
             raise MemoryEditError("complete body hash did not match; editing is disabled")
         editing = Editing(uuid.uuid4().hex, owner, server, baseline, body, expected_metadata)
+        self._make_room()
         self.sessions[editing.id] = editing
+        self._touch(editing)
         return editing
 
     def get(self, identity: str, owner: str):
         editing = self.sessions.get(identity)
         if editing is None or editing.owner != owner:
-            raise MemoryEditError("editor session ended or belongs to another browser; reload")
+            raise MemoryEditError(
+                "editor session ended, expired or belongs to another browser; "
+                "draft retained here; open the latest record in a new tab before saving"
+            )
+        if not editing.lock.locked() and self.clock() - editing.last_used >= self.idle_seconds:
+            self._release(identity)
+            raise MemoryEditError(
+                "editor session expired; draft retained here; open the latest record "
+                "in a new tab before saving"
+            )
+        self._touch(editing)
         return editing
 
     async def save(self, identity: str, owner: str, action: str, draft, expected_revision: str):
         editing = self.get(identity, owner)
         async with editing.lock:
+            if self.sessions.get(identity) is not editing:
+                raise MemoryEditError(
+                    "editor session ended; draft retained; open the latest record"
+                )
+            self._touch(editing)
             if editing.context["revision"] != expected_revision:
                 raise MemoryEditError("editor changed in another request; draft retained, reload")
             if not supported(await self.list_tools(editing.server)):
@@ -231,4 +304,5 @@ class MemoryEditor:
                 editing.body = draft
             editing.context = fresh
             editing.metadata = metadata(result)
+            self._touch(editing)
             return {"saved": action, "edit_context": fresh, "metadata": editing.metadata}

@@ -215,3 +215,23 @@ def test_unsafe_bind_is_refused_before_creating_local_state(tmp_path):
 ])
 def test_untrusted_links_are_not_clickable(address):
     assert github_url(address) is None
+
+
+def test_close_editor_releases_baseline_without_a_remote_write(rig):
+    app, client, headers, github, memory = rig
+    page = client.get("/memory/munnin/open?uuid=record")
+    state = initial(page)
+    assert "data-memory-close" in page.text
+    assert "30 minutes" in page.text
+    path = "/memory-edit/" + state["id"]
+    calls = len(memory.calls)
+    assert client.post(path + "/close", json={}, headers=headers).json() == {"closed": True}
+    assert state["id"] not in app.state.memory_editor.sessions
+    assert len(memory.calls) == calls
+    refused = client.post(path + "/save", json={
+        "action": "body", "draft": "not saved",
+        "expected_revision": state["context"]["revision"],
+    }, headers=headers)
+    assert refused.status_code == 400
+    assert "draft retained" in refused.json()["error"]
+    assert len(memory.calls) == calls

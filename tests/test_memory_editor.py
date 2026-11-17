@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import hashlib
 
@@ -165,3 +166,90 @@ async def test_capability_loss_or_transport_failure_never_advances_a_baseline():
     with pytest.raises(ClientError, match="interrupted"):
         await service.save(opened.id, "browser", "body", "lost", server.revision)
     assert opened.body == "ABC" and opened.context == baseline
+
+
+async def test_close_releases_only_the_owning_idle_editor():
+    server, service = editor()
+    opened = await service.open("browser", "munnin", "record")
+    timer = opened.expiry
+    with pytest.raises(MemoryEditError, match="another browser"):
+        service.close(opened.id, "stranger")
+    assert opened.id in service.sessions
+    async with opened.lock:
+        with pytest.raises(MemoryEditError, match="saving"):
+            service.close(opened.id, "browser")
+    service.close(opened.id, "browser")
+    assert opened.id not in service.sessions
+    assert timer.cancelled()
+    with pytest.raises(MemoryEditError, match="ended"):
+        service.get(opened.id, "browser")
+
+
+async def test_capacity_releases_least_recently_used_without_touching_busy_saves():
+    server = Server()
+    now = [0.0]
+    service = MemoryEditor(server.tools, server.call, max_sessions=2, clock=lambda: now[0])
+    first = await service.open("browser", "munnin", "record")
+    now[0] += 1
+    second = await service.open("browser", "munnin", "record")
+    now[0] += 1
+    service.get(first.id, "browser")
+    second_timer = second.expiry
+    third = await service.open("browser", "munnin", "record")
+    assert set(service.sessions) == {first.id, third.id}
+    assert second_timer.cancelled()
+    async with first.lock, third.lock:
+        with pytest.raises(MemoryEditError, match="all editor sessions are busy"):
+            await service.open("browser", "munnin", "record")
+    assert len(service.sessions) == 2
+
+
+async def test_idle_expiry_and_activity_refresh_are_deterministic():
+    server = Server()
+    now = [0.0]
+    service = MemoryEditor(server.tools, server.call, idle_seconds=10, clock=lambda: now[0])
+    opened = await service.open("browser", "munnin", "record")
+    first_timer = opened.expiry
+    now[0] = 9
+    service.get(opened.id, "browser")
+    assert first_timer.cancelled()
+    now[0] = 11
+    service._expire(opened.id)
+    assert opened.id in service.sessions
+    now[0] = 20
+    service._expire(opened.id)
+    assert opened.id not in service.sessions
+    with pytest.raises(MemoryEditError, match="draft retained"):
+        service.get(opened.id, "browser")
+
+
+async def test_expiry_never_releases_a_save_in_flight_and_lazy_expiry_refuses_writes():
+    server = Server()
+    now = [0.0]
+    service = MemoryEditor(server.tools, server.call, idle_seconds=10, clock=lambda: now[0])
+    opened = await service.open("browser", "munnin", "record")
+    async with opened.lock:
+        now[0] = 20
+        service._expire(opened.id)
+        assert opened.id in service.sessions
+    calls = len(server.calls)
+    with pytest.raises(MemoryEditError, match="expired.*draft retained"):
+        await service.save(opened.id, "browser", "body", "lost", server.revision)
+    assert len(server.calls) == calls
+    assert not service.sessions
+
+
+async def test_abandoned_baseline_is_released_without_another_request():
+    server = Server()
+    service = MemoryEditor(server.tools, server.call, idle_seconds=0.01)
+    released = asyncio.Event()
+    original_release = service._release
+
+    def release(identity):
+        original_release(identity)
+        released.set()
+
+    service._release = release
+    opened = await service.open("browser", "munnin", "record")
+    await asyncio.wait_for(released.wait(), timeout=1)
+    assert opened.id not in service.sessions

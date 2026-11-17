@@ -8,7 +8,10 @@
     <p>Record: <code>{{ editing.context.uuid }}</code> · {{ editing.server }}</p>
     <p class="subtle">Revision: <code data-memory-revision>{{ editing.context.revision }}</code></p>
     <p>Body and metadata save independently. Neither save updates a summary automatically.
-      Unsaved drafts are not promised to survive a browser or app restart.</p>
+      Unsaved drafts are not promised to survive a browser or app restart.
+      Server baselines expire after 30 minutes without a preview/save request; at most
+      32 editors are retained, with the least recently used idle editor released first.
+      Expiry does not erase the draft in this page; reopen the latest record before saving.</p>
     <div class="editor-columns">
       <section>
         <h3>Body <span data-body-dirty class="subtle">Saved baseline</span></h3>
@@ -32,6 +35,7 @@
       </section>
     </div>
     <p data-status role="status" aria-live="polite"></p>
+    <button class="button" data-memory-close>Close editor</button>
     <p><a href="/memory/{{ editing.server|urlencode }}/open?uuid={{ editing.context.uuid|urlencode }}" target="_blank" rel="noopener noreferrer">Open the latest record in a new tab; keep both drafts here</a></p>
     <section data-memory-preview hidden>
       <h3 data-preview-title>Read-only preview</h3>

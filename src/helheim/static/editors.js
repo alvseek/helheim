@@ -1,7 +1,100 @@
 (function () {
   "use strict";
+  const normal = (text) => text.replace(/\r\n|\r/g, "\n");
+
+  // Textareas expose LF only. Uniform originals need no alignment. For mixed
+  // endings, use a longest increasing sequence of lines unique in both texts as
+  // monotone anchors (lowest old index wins ties). In each gap, preserve equal
+  // prefixes/suffixes, then pair replacements positionally. Repeated lines in
+  // an ambiguous gap are replacements, not guessed moves. Anchored/matched and
+  // paired lines retain their original separator; additional lines inherit the
+  // preceding separator, next original separator, or LF. No recursive diff or
+  // edit-distance trace: O(lines log lines) work and O(lines) auxiliary memory.
+  // If editing brings a standalone CR directly before LF across an empty line,
+  // promote that LF to CRLF: otherwise the two breaks would fuse into one.
+  function newlineDraft(original, value) {
+    const text = normal(value);
+    if (text === normal(original)) return original;
+    const endings = original.match(/\r\n|\r|\n/g) || [];
+    if (endings.every((ending) => ending === endings[0])) {
+      return text.replace(/\n/g, endings[0] || "\n");
+    }
+    const oldLines = normal(original).split("\n");
+    const newLines = text.split("\n");
+    const unique = (lines) => {
+      const indices = new Map();
+      lines.forEach((line, index) => { indices.set(line, indices.has(line) ? -1 : index); });
+      return indices;
+    };
+    const oldIndices = unique(oldLines);
+    const newIndices = unique(newLines);
+    const candidates = [];
+    newLines.forEach((line, index) => {
+      const oldIndex = oldIndices.get(line);
+      if (oldIndex !== undefined && oldIndex !== -1 && newIndices.get(line) !== -1) {
+        candidates.push([oldIndex, index]);
+      }
+    });
+    const tails = [];
+    const previous = new Array(candidates.length);
+    candidates.forEach(([oldIndex], index) => {
+      let low = 0;
+      let high = tails.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (candidates[tails[middle]][0] < oldIndex) low = middle + 1;
+        else high = middle;
+      }
+      previous[index] = low ? tails[low - 1] : -1;
+      tails[low] = index;
+    });
+    const matches = [];
+    for (let index = tails.length ? tails[tails.length - 1] : -1; index !== -1; index = previous[index]) {
+      matches.push(candidates[index]);
+    }
+    matches.reverse();
+    const mapped = new Array(newLines.length);
+    let oldStart = 0;
+    let newStart = 0;
+    for (const [oldIndex, newIndex] of [...matches, [oldLines.length, newLines.length]]) {
+      let oldEnd = oldIndex;
+      let newEnd = newIndex;
+      while (oldStart < oldEnd && newStart < newEnd && oldLines[oldStart] === newLines[newStart]) {
+        mapped[newStart++] = endings[oldStart++];
+      }
+      while (oldStart < oldEnd && newStart < newEnd && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
+        mapped[--newEnd] = endings[--oldEnd];
+      }
+      for (let offset = 0; offset < Math.min(oldEnd - oldStart, newEnd - newStart); offset++) {
+        mapped[newStart + offset] = endings[oldStart + offset];
+      }
+      if (newIndex < newLines.length) mapped[newIndex] = endings[oldIndex];
+      oldStart = oldIndex + 1;
+      newStart = newIndex + 1;
+    }
+    const following = new Array(mapped.length);
+    let next;
+    for (let index = mapped.length - 1; index >= 0; index--) {
+      following[index] = next;
+      next = mapped[index] || next;
+    }
+    let preceding;
+    return newLines.map((line, index) => {
+      if (index === newLines.length - 1) return line;
+      let ending = mapped[index] || preceding || following[index] ||
+        endings[0] || "\n";
+      if (line === "" && preceding === "\r" && ending === "\n") ending = "\r\n";
+      preceding = ending;
+      return line + ending;
+    }).join("");
+  }
+
+  // Also execute this same production mapper directly in the Node regressions.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { normal, newlineDraft };
+    return;
+  }
   const originToken = document.querySelector('meta[name="csrf-token"]').content;
-  const normal = (text) => text.replace(/\r\n/g, "\n");
   let dirty = () => false;
   let refresh = () => {};
   let sourceState = null;
@@ -51,7 +144,7 @@
   }
 
   async function pending(root, task) {
-    if (root.dataset.busy === "true") return;
+    if (root.dataset.busy === "true" || root.dataset.closed === "true") return;
     root.dataset.busy = "true";
     const buttons = Array.from(root.querySelectorAll("button"));
     buttons.forEach((button) => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
@@ -62,7 +155,10 @@
       report(root, error.message + " Drafts have not been replaced.", true);
     } finally {
       delete root.dataset.busy;
-      buttons.forEach((button) => { button.disabled = false; button.removeAttribute("aria-busy"); });
+      buttons.forEach((button) => {
+        button.disabled = root.dataset.closed === "true";
+        button.removeAttribute("aria-busy");
+      });
       refresh();
     }
   }
@@ -184,7 +280,7 @@
       root.querySelectorAll("[data-source-action]").forEach((button) => {
         button.addEventListener("click", () => pending(root, async () => {
           const action = button.dataset.sourceAction;
-          const submitted = dirty() ? textarea.value : state.original;
+          const submitted = newlineDraft(state.original, textarea.value);
           try {
             const result = await post("/procedures/" + encodeURIComponent(state.id) + "/" + action, {
               procedure: state.procedure, backend: state.backend, source_id: state.source_id,
@@ -235,6 +331,12 @@
       const metadataDirty = () => fields.value !== metadataBaseline;
       dirty = () => bodyDirty() || metadataDirty();
       refresh = () => {
+        if (root.dataset.closed === "true") {
+          body.disabled = true;
+          fields.disabled = true;
+          root.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+          return;
+        }
         root.querySelector("[data-body-dirty]").textContent = bodyDirty() ? "Unsaved body" : "Saved baseline";
         root.querySelector("[data-metadata-dirty]").textContent = metadataDirty() ? "Unsaved metadata" : "Saved baseline";
         root.querySelectorAll('[data-memory-action="save"]').forEach((button) => {
@@ -244,13 +346,26 @@
       };
       body.addEventListener("input", refresh);
       fields.addEventListener("input", refresh);
+      const close = root.querySelector("[data-memory-close]");
+      if (close) close.addEventListener("click", () => {
+        if (root.dataset.busy === "true" || root.dataset.closed === "true") return;
+        if (dirty() && !window.confirm("Close this editor and discard its unsaved drafts?")) return;
+        return pending(root, async () => {
+          const result = await post("/memory-edit/" + encodeURIComponent(state.id) + "/close");
+          if (result.closed !== true) throw new Error("Close was not confirmed; keep this editor open.");
+          root.dataset.closed = "true";
+          dirty = () => false;
+          refresh();
+          window.location.assign("/memory");
+        });
+      });
       root.querySelectorAll("[data-memory-action]").forEach((button) => {
         button.addEventListener("click", () => pending(root, async () => {
           const area = button.dataset.area;
           const rawMetadata = fields.value;
           let draft;
           if (area === "body") {
-            draft = bodyDirty() ? body.value : bodyBaseline;
+            draft = newlineDraft(bodyBaseline, body.value);
           } else {
             try { draft = JSON.parse(rawMetadata); }
             catch (_) { throw new Error("Metadata must be valid JSON; fix it and retry."); }

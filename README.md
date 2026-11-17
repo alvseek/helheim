@@ -73,7 +73,13 @@ revision refuses the save rather than overwriting someone else's work.
 
 Validation, network and conflict errors leave both browser drafts in place. Open
 the latest record in a new tab to inspect its current baseline without destroying
-them. Unsaved drafts are not promised to survive a browser or app restart.
+them. **Close editor** releases its server baseline after confirming any unsaved
+drafts. Baselines also expire 30 minutes after the last preview/save request.
+At most 32 editors are retained; opening another releases the least recently used
+editor that is not saving. Expiry leaves the browser draft intact, but preview/save
+then asks you to open the latest record in another tab. Typing alone does not
+refresh the server lifetime. Unsaved drafts are not promised to survive a browser
+or app restart.
 
 ## Configure procedure sources
 
@@ -147,6 +153,11 @@ uv run ruff check
 The integration marker reaches the configured real server only when its required
 token exists. Passing unit tests is not proof of a real GitHub write, an issuer
 exchange or browser behavior.
+
+The editor JavaScript regressions require Node.js 18+ and run automatically from
+pytest (with an explicit skip reason if Node is unavailable). Run them directly
+with `node --test tests/editors_newlines.test.cjs`; they execute the shipped script
+with DOM/fetch fixtures, not a native browser.
 
 For unpublished composer development, build its wheel in its own checkout, install
 that wheel explicitly into the test environment, and use `uv run --no-sync` there

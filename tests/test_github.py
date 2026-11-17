@@ -66,6 +66,38 @@ def test_process_failure_does_not_expose_credentials_or_arbitrary_output():
     assert "secret-credential" not in str(caught.value)
 
 
+@pytest.mark.parametrize("output", ["", "HTTP/2.0 201 Created\n", "invalid\n\n{}"])
+@pytest.mark.parametrize("operation", ["branch", "commit"])
+def test_missing_write_response_is_uncertain(output, operation):
+    github = GitHub(Repository("core", "owner", "repo"),
+                    runner=lambda *args, **kwargs:
+                    subprocess.CompletedProcess([], 1, output, "secret-credential"))
+    with pytest.raises(GitUncertain, match="reconcile") as caught:
+        if operation == "branch":
+            github.create_branch("branch", OID)
+        else:
+            github.commit("branch", OID, "procedures/sections/source.md", b"body", "save")
+    assert "secret-credential" not in str(caught.value)
+
+
+def test_missing_read_response_remains_a_definite_read_failure():
+    github = GitHub(Repository("core", "owner", "repo"),
+                    runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 1, "", ""))
+    with pytest.raises(GitError) as caught:
+        github.resolve("main")
+    assert not isinstance(caught.value, GitUncertain)
+
+
+def test_missing_gh_is_not_an_uncertain_write():
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("gh")
+
+    github = GitHub(Repository("core", "owner", "repo"), runner=missing)
+    with pytest.raises(GitError, match="not installed") as caught:
+        github.create_branch("branch", OID)
+    assert not isinstance(caught.value, GitUncertain)
+
+
 @pytest.mark.parametrize("mode", ["120000", "160000"])
 def test_sources_refuse_git_symlinks_and_submodules(mode):
     replies = iter([

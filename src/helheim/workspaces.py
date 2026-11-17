@@ -261,9 +261,11 @@ class Workspaces:
             raise GitUncertain("workspace has an unfinished request; reconcile first")
         if not state["branch_created"] or not state["pending_pr"]:
             raise GitError("there is no saved commit waiting for a PR")
-        self._check_pull(state, github)
         state = self.store.update(state, pending_action="pull")
         try:
+            # The source commit is already confirmed. A failed PR check must
+            # preserve that success without creating or reusing a refused PR.
+            self._check_pull(state, github)
             pull = github.ensure_pull(state["branch"], identity)
             if (not isinstance(pull, dict) or type(pull.get("number")) is not int
                     or pull["number"] < 1 or not isinstance(pull.get("html_url"), str)
