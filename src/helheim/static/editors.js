@@ -1,0 +1,294 @@
+(function () {
+  "use strict";
+  const originToken = document.querySelector('meta[name="csrf-token"]').content;
+  const normal = (text) => text.replace(/\r\n/g, "\n");
+  let dirty = () => false;
+  let refresh = () => {};
+  let sourceState = null;
+
+  function report(root, text, bad) {
+    const output = root.querySelector("[data-status]");
+    if (!output) return;
+    output.textContent = text;
+    output.className = bad ? "errors" : "notice quiet";
+  }
+
+  async function post(url, body) {
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": originToken },
+        body: JSON.stringify(body || {}),
+      });
+    } catch (_) {
+      const error = new Error("Connection lost; outcome unconfirmed. Keep this draft.");
+      error.uncertain = true;
+      throw error;
+    }
+    let result;
+    try {
+      result = await response.json();
+    } catch (_) {
+      const error = new Error("Response unreadable; outcome unconfirmed. Keep this draft.");
+      error.uncertain = true;
+      throw error;
+    }
+    if (!result || typeof result !== "object") {
+      const error = new Error("Response shape is unsupported; outcome unconfirmed.");
+      error.uncertain = true;
+      throw error;
+    }
+    if (!response.ok) {
+      let message = result.error || result.detail || "Request did not complete.";
+      if (typeof message !== "string") message = JSON.stringify(message);
+      const error = new Error(message.slice(0, 1000));
+      error.uncertain = Boolean(result.uncertain);
+      throw error;
+    }
+    return result;
+  }
+
+  async function pending(root, task) {
+    if (root.dataset.busy === "true") return;
+    root.dataset.busy = "true";
+    const buttons = Array.from(root.querySelectorAll("button"));
+    buttons.forEach((button) => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
+    report(root, "Request in progress; drafts remain in place.", false);
+    try {
+      await task();
+    } catch (error) {
+      report(root, error.message + " Drafts have not been replaced.", true);
+    } finally {
+      delete root.dataset.busy;
+      buttons.forEach((button) => { button.disabled = false; button.removeAttribute("aria-busy"); });
+      refresh();
+    }
+  }
+
+  function validation(errors) {
+    const failed = Object.entries(errors || {}).filter((entry) => entry[1].length);
+    return failed.length ? " Draft validation still fails: " +
+      failed.map(([backend, names]) => backend + ": " + names.join(", ")).join("; ") + "." : "";
+  }
+
+  function workspaceResult(root, result) {
+    const state = result.workspace;
+    const link = root.querySelector("[data-pr-link]");
+    if (link && state.pull_url) {
+      try {
+        const address = new URL(state.pull_url);
+        if (address.protocol === "https:" && address.hostname === "github.com" &&
+            !address.username && !address.password) {
+          link.href = address.href;
+          link.hidden = false;
+        }
+      } catch (_) { /* An invalid link stays unclickable. */ }
+    }
+    const retry = root.querySelector('[data-workspace-action="retry-pr"]');
+    const reconcile = root.querySelector('[data-workspace-action="reconcile"]');
+    if (retry) retry.hidden = !state.pending_pr || Boolean(state.pending_action);
+    if (reconcile) reconcile.hidden = !state.pending_action;
+    if (sourceState) {
+      sourceState.pending = Boolean(state.pending_action || state.pending_pr);
+    }
+    return result.status === "saved_pr_pending"
+      ? "Source saved to the branch. Draft PR not confirmed; retry PR only. " + (result.error || "")
+      : "Source saved to the editing branch and draft PR. Not merged or deployed.";
+  }
+
+  document.querySelectorAll("[data-workspace-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const root = button.closest("[data-workspace]");
+      pending(root, async () => {
+        const action = button.dataset.workspaceAction;
+        const result = await post("/procedures/" + encodeURIComponent(root.dataset.workspace) + "/" + action);
+        if (action === "reconcile") {
+          if (sourceState) sourceState.reloadRequired = true;
+          workspaceResult(root, { workspace: result.workspace });
+          report(root, result.notice, false);
+        } else {
+          workspaceResult(root, result);
+          report(root, result.error
+            ? "Source remains saved; draft PR is still not confirmed. " + result.error
+            : "Draft PR confirmed; the previously saved source commit was not changed.",
+          Boolean(result.error));
+        }
+      });
+    });
+  });
+
+  const creator = document.querySelector("[data-new-workspace]");
+  if (creator) creator.addEventListener("submit", (event) => {
+    event.preventDefault();
+    pending(creator, async () => {
+      const result = await post("/procedures/workspaces", {
+        repository: creator.querySelector("select").value,
+      });
+      window.location.assign(result.redirect);
+    });
+  });
+
+  const root = document.querySelector("[data-editor-init]");
+  if (root) {
+    const state = JSON.parse(root.dataset.editorInit);
+    if (state.kind === "source") {
+      sourceState = state;
+      const textarea = document.getElementById("source-draft");
+      // HTML's textarea parser strips an initial newline. Set the actual source
+      // value explicitly so opening an editor never manufactures a dirty edit.
+      textarea.value = normal(state.original);
+      const actions = root.querySelector("[data-workspace]");
+      dirty = () => textarea.value !== normal(state.original);
+      refresh = () => {
+        root.querySelector("[data-source-dirty]").textContent = dirty() ? "Unsaved source" : "Saved baseline";
+        root.querySelector('[data-source-action="save"]').disabled =
+          !dirty() || state.pending || state.reloadRequired || root.dataset.busy === "true";
+      };
+
+      function composed(sections, label) {
+        const container = document.querySelector("[data-source-composed]");
+        container.replaceChildren();
+        sections.forEach((section) => {
+          const block = document.createElement("section");
+          block.className = "source-section";
+          const heading = document.createElement("div");
+          heading.className = "source-provenance";
+          const name = document.createElement("code");
+          name.textContent = section.id + " · " + section.source;
+          heading.append(name);
+          if (section.backend_applicability.length === 2) {
+            const shared = document.createElement("span");
+            shared.className = "badge";
+            shared.textContent = "Shared";
+            heading.append(shared);
+          }
+          const edit = document.createElement("a");
+          edit.className = "button";
+          edit.textContent = "Edit source";
+          edit.href = "/procedures/" + encodeURIComponent(state.id) + "?procedure=" +
+            encodeURIComponent(state.procedure) + "&backend=" + state.backend +
+            "&source_id=" + encodeURIComponent(section.id);
+          heading.append(edit);
+          const content = document.createElement("pre");
+          content.className = "editor-preview";
+          content.textContent = section.text;
+          block.append(heading, content);
+          container.append(block);
+        });
+        document.querySelector("[data-composed-label]").textContent = label;
+      }
+
+      textarea.addEventListener("input", refresh);
+      root.querySelectorAll("[data-source-action]").forEach((button) => {
+        button.addEventListener("click", () => pending(root, async () => {
+          const action = button.dataset.sourceAction;
+          const submitted = dirty() ? textarea.value : state.original;
+          try {
+            const result = await post("/procedures/" + encodeURIComponent(state.id) + "/" + action, {
+              procedure: state.procedure, backend: state.backend, source_id: state.source_id,
+              draft: submitted, expected_head: state.head, expected_source_hash: state.source_hash,
+            });
+            if (action === "preview") {
+              if (!result.rendered || !result.sections || !result.sections[state.backend]) {
+                throw new Error("Preview response is incomplete; nothing was saved.");
+              }
+              root.querySelector("[data-source-preview]").hidden = false;
+              root.querySelector("[data-source-diff]").textContent = result.diff;
+              root.querySelector("[data-preview-db]").textContent = result.rendered.db;
+              root.querySelector("[data-preview-markdown]").textContent = result.rendered.markdown;
+              composed(result.sections[state.backend], "Unsaved combined preview · " + state.backend);
+              report(actions, "Preview only; nothing was saved." + validation(result.validation_errors), false);
+            } else {
+              if (!["saved", "saved_pr_pending"].includes(result.status) ||
+                  typeof result.head !== "string" || typeof result.source_hash !== "string" ||
+                  !result.workspace || !result.sections || !result.sections[state.backend]) {
+                const error = new Error("Save result is incomplete; outcome unconfirmed.");
+                error.uncertain = true;
+                throw error;
+              }
+              state.original = submitted;
+              state.head = result.head;
+              state.source_hash = result.source_hash;
+              document.getElementById("source-head").textContent = result.head;
+              composed(result.sections[state.backend], "Saved branch composition · " + state.backend + " (not deployed)");
+              report(actions, workspaceResult(actions, result) + validation(result.validation_errors),
+                Boolean(result.error));
+            }
+          } catch (error) {
+            if (action === "save" && error.uncertain) {
+              state.reloadRequired = true;
+              actions.querySelector('[data-workspace-action="reconcile"]').hidden = false;
+            }
+            report(actions, error.message + " This draft is retained.", true);
+          }
+        }));
+      });
+    } else {
+      const body = document.getElementById("memory-body");
+      const fields = document.getElementById("memory-metadata");
+      body.value = normal(state.body);
+      let bodyBaseline = state.body;
+      let metadataBaseline = fields.value;
+      const bodyDirty = () => body.value !== normal(bodyBaseline);
+      const metadataDirty = () => fields.value !== metadataBaseline;
+      dirty = () => bodyDirty() || metadataDirty();
+      refresh = () => {
+        root.querySelector("[data-body-dirty]").textContent = bodyDirty() ? "Unsaved body" : "Saved baseline";
+        root.querySelector("[data-metadata-dirty]").textContent = metadataDirty() ? "Unsaved metadata" : "Saved baseline";
+        root.querySelectorAll('[data-memory-action="save"]').forEach((button) => {
+          button.disabled = (button.dataset.area === "body" ? !bodyDirty() : !metadataDirty()) ||
+            root.dataset.busy === "true";
+        });
+      };
+      body.addEventListener("input", refresh);
+      fields.addEventListener("input", refresh);
+      root.querySelectorAll("[data-memory-action]").forEach((button) => {
+        button.addEventListener("click", () => pending(root, async () => {
+          const area = button.dataset.area;
+          const rawMetadata = fields.value;
+          let draft;
+          if (area === "body") {
+            draft = bodyDirty() ? body.value : bodyBaseline;
+          } else {
+            try { draft = JSON.parse(rawMetadata); }
+            catch (_) { throw new Error("Metadata must be valid JSON; fix it and retry."); }
+          }
+          const result = await post("/memory-edit/" + encodeURIComponent(state.id) + "/" +
+            button.dataset.memoryAction, {
+              action: area, draft: draft, expected_revision: state.context.revision,
+            });
+          if (button.dataset.memoryAction === "preview") {
+            root.querySelector("[data-memory-preview]").hidden = false;
+            root.querySelector("[data-preview-title]").textContent = area + " · read-only preview";
+            root.querySelector("[data-memory-diff]").textContent = result.diff;
+            root.querySelector("[data-memory-content]").textContent = result.preview;
+            report(root, "Preview only; nothing was saved.", false);
+          } else {
+            if (result.saved !== area || !result.edit_context || !result.metadata ||
+                result.edit_context.uuid !== state.context.uuid ||
+                result.edit_context.tenant !== state.context.tenant ||
+                typeof result.edit_context.revision !== "string") {
+              throw new Error("Save result is incomplete; outcome unconfirmed. Keep both drafts.");
+            }
+            state.context = result.edit_context;
+            root.querySelector("[data-memory-revision]").textContent = result.edit_context.revision;
+            if (area === "body") {
+              bodyBaseline = draft;
+            } else {
+              metadataBaseline = JSON.stringify(result.metadata, null, 2);
+              if (fields.value === rawMetadata) fields.value = metadataBaseline;
+            }
+            report(root, "Saved " + result.saved + " to Munnin. The other area's draft was retained.", false);
+          }
+        }));
+      });
+    }
+    refresh();
+  }
+
+  window.addEventListener("beforeunload", (event) => {
+    if (dirty()) { event.preventDefault(); event.returnValue = ""; }
+  });
+})();

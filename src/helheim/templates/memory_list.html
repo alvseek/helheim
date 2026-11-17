@@ -1,0 +1,29 @@
+{% extends "_editor_shell.html" %}
+{% block title %}{{ server }} memory{% endblock %}
+{% block content %}
+  <h2>{{ server }} · memory metadata</h2>
+  <form method="get" class="editor-selectors">
+    <label>Agent <input type="text" name="agent_id" value="{{ filters.get('agent_id', '') }}"></label>
+    <label>Type <input type="text" name="record_type" value="{{ filters.get('record_type', '') }}"></label>
+    <label>Project <input type="text" name="project" value="{{ filters.get('project', '') }}"></label>
+    <button class="button" type="submit">Filter metadata</button>
+  </form>
+  <form action="/memory/{{ server|urlencode }}/open" method="get" class="editor-selectors">
+    <label>Record UUID <input type="text" name="uuid" required></label>
+    <button class="button" type="submit">Open record</button>
+  </form>
+  <table class="history">
+    <thead><tr><th>Title</th><th>Type</th><th>Agent / project</th><th>Summary</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><a href="/memory/{{ server|urlencode }}/open?uuid={{ row.uuid|urlencode }}">{{ row.title or row.uuid }}</a></td>
+          <td>{{ row.record_type }}</td>
+          <td>{{ row.agent_id }} / {{ row.project or '' }}</td>
+          <td>{{ row.content_summary or '' }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not rows %}<p>No matching records were returned for these filters.</p>{% endif %}
+{% endblock %}

@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from requests.exceptions import RequestException
@@ -18,6 +18,8 @@ from requests.exceptions import RequestException
 from . import mcp_client
 from .auth import Auth, AuthError
 from .config import Server, Settings, load_settings
+from .editor_security import COOKIE, CSRF_FIELD_PREFIX, EditorSecurity, csrf_field_name
+from .editors import register_editors
 from .forms import arguments_from_form, fields_from_schema
 from .store import CallRecord, Store
 from .tokens import TokenCounter
@@ -32,13 +34,40 @@ RENDER_LIMIT_BYTES = 2 * 1024 * 1024
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    app = FastAPI(title="Helheim")
+    security = EditorSecurity(settings)
+    app = FastAPI(title="Helheim", dependencies=[Depends(security.require_write)])
     app.state.settings = settings
     app.state.auth = Auth(settings)
     app.state.store = Store(settings.db_path, settings.max_store_bytes)
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     app.state.templates = templates
+    templates.env.globals["csrf_field_name"] = csrf_field_name
+
+    @app.middleware("http")
+    async def local_browser(request: Request, call_next):
+        try:
+            security.prepare(request)
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        response = await call_next(request)
+        cross_site = request.headers.get("sec-fetch-site") == "cross-site"
+        confirmed_callback = request.url.path == "/callback" and response.status_code == 303
+        if (request.state.new_editor_cookie and request.method in ("GET", "HEAD")
+                and (not cross_site or confirmed_callback)):
+            response.set_cookie(
+                COOKIE, request.state.editor_owner, httponly=True, samesite="strict",
+                secure=request.url.scheme == "https",
+            )
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        if request.url.path.startswith(("/procedures", "/memory")):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+            )
+        return response
 
     def need_server(name: str) -> Server:
         server = settings.server(name)
@@ -166,7 +195,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def run_tool(name: str, tool: str, request: Request):
         server = need_server(name)
         form = await request.form()
-        submitted = {key: str(value) for key, value in form.items()}
+        submitted = {
+            key: str(value) for key, value in form.items()
+            if not (key.startswith(CSRF_FIELD_PREFIX) and str(value) == request.state.csrf)
+        }
         try:
             tools = await load_tools(server)
         except AuthError as exc:
@@ -283,6 +315,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    register_editors(app, settings, templates)
     return app
 
 

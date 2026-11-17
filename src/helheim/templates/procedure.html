@@ -1,0 +1,90 @@
+{% extends "_editor_shell.html" %}
+{% block title %}{{ rendered[backend].title }}{% endblock %}
+{% block content %}
+  <h2>{{ rendered[backend].title }}</h2>
+  <div class="metrics">
+    <span>Source commit: <code id="source-head">{{ head }}</code></span>
+    <span>Composer: <code>{{ composer_version }}</code></span>
+    <span class="badge">Preview, not deployed content</span>
+  </div>
+  <p><code>{{ workspace.repository.owner }}/{{ workspace.repository.name }}</code> ·
+    <code>{{ workspace.branch }}</code></p>
+  <form method="get" class="editor-selectors">
+    <label>Procedure
+      <select name="procedure">
+        {% for name in catalog.procedures %}
+          <option value="{{ name }}" {% if name == procedure %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Backend
+      <select name="backend">
+        <option value="db" {% if backend == "db" %}selected{% endif %}>DB</option>
+        <option value="markdown" {% if backend == "markdown" %}selected{% endif %}>Markdown</option>
+      </select>
+    </label>
+    <label>Revision
+      <select name="revision">
+        <option value="branch" {% if revision == "branch" %}selected{% endif %}>Workspace branch</option>
+        <option value="base" {% if revision == "base" %}selected{% endif %}>Base snapshot (read-only)</option>
+      </select>
+    </label>
+    <button class="button" type="submit">View</button>
+  </form>
+  {% if validation_errors[backend] %}
+    <p class="notice">Draft validation failed: unresolved operations
+      {{ validation_errors[backend]|join(", ") }}. This draft is not ready to publish.</p>
+  {% endif %}
+  {% if original %}
+    <section class="source-editor" {% if init %}data-editor-init='{{ init|tojson }}'{% endif %}>
+      <h3>Original source: <code>{{ original.id }}</code></h3>
+      <p><code>{{ original.source }}</code></p>
+      {% if original.backend_applicability|length == 2 %}
+        <p class="notice">Shared source: saving changes both Markdown and DB delivery.</p>
+      {% else %}
+        <p class="notice quiet">This source applies to {{ original.backend_applicability|join(", ") }}.</p>
+      {% endif %}
+      <p class="subtle">Catalog dependents (including declared legacy consumers):
+        {{ dependents|join(", ") }}</p>
+      {% if init %}
+        <label for="source-draft">Plain Markdown source</label>
+        <textarea id="source-draft" rows="18" spellcheck="false">{{ original.text }}</textarea>
+        <div class="editor-actions">
+          <button class="button" data-source-action="preview">Preview both backends</button>
+          <button class="button" data-source-action="save" disabled>Save section to draft PR</button>
+          <span data-source-dirty class="subtle">Saved baseline</span>
+        </div>
+        <div data-workspace="{{ workspace.id }}">
+          <button class="button" data-workspace-action="retry-pr" {% if not workspace.pending_pr or workspace.pending_action %}hidden{% endif %}>Retry PR only</button>
+          <button class="button" data-workspace-action="reconcile" {% if not workspace.pending_action %}hidden{% endif %}>Reconcile save</button>
+          <a data-pr-link {% if workspace.pull_url|github_url %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %} target="_blank" rel="noopener noreferrer">Open draft PR</a>
+          <p data-status role="status" aria-live="polite"></p>
+        </div>
+        <p><a href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;source_id={{ original.id|urlencode }}" target="_blank" rel="noopener noreferrer">Open latest source in a new tab; keep this draft here</a></p>
+        <section data-source-preview hidden>
+          <h4>Changes</h4><pre class="editor-preview" data-source-diff></pre>
+          <h4>DB preview</h4><pre class="editor-preview" data-preview-db></pre>
+          <h4>Markdown preview</h4><pre class="editor-preview" data-preview-markdown></pre>
+        </section>
+      {% else %}
+        <p class="notice quiet">The base snapshot is read-only. Choose the workspace branch to edit.</p>
+        <pre class="editor-preview">{{ original.text }}</pre>
+      {% endif %}
+    </section>
+  {% endif %}
+  <h3 data-composed-label>Composed instructions · {{ backend }}</h3>
+  <div data-source-composed>
+  {% for section in rendered[backend].sections %}
+    <section class="source-section">
+      <div class="source-provenance">
+        <code>{{ section.id }}</code> · <code>{{ section.source }}</code>
+        {% if section.backend_applicability|length == 2 %}<span class="badge">Shared</span>{% endif %}
+        {% if revision == "branch" %}
+          <a class="button" href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;source_id={{ section.id|urlencode }}">Edit source</a>
+        {% endif %}
+      </div>
+      <pre class="editor-preview">{{ section.text }}</pre>
+    </section>
+  {% endfor %}
+  </div>
+{% endblock %}
