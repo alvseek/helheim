@@ -235,3 +235,25 @@ def test_close_editor_releases_baseline_without_a_remote_write(rig):
     assert refused.status_code == 400
     assert "draft retained" in refused.json()["error"]
     assert len(memory.calls) == calls
+
+
+@pytest.mark.parametrize("path", ["/", "/memory", "/procedures"])
+def test_response_policy_preserves_native_same_origin_form_submissions(rig, path):
+    _, client, _, _, _ = rig
+    response = client.get(path)
+    assert response.status_code == 200
+    # no-referrer makes Chromium native form POSTs carry Origin: null. Keep
+    # cross-origin referrers suppressed without breaking the strict Origin guard.
+    assert response.headers["Referrer-Policy"] == "same-origin"
+
+
+@pytest.mark.parametrize("path,body", WRITES)
+def test_null_origin_remains_refused_on_every_product_post(rig, path, body):
+    _, client, headers, github, memory = rig
+    response = client.post(
+        path, json=body,
+        headers={**headers, "Origin": "null", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert response.status_code == 403
+    assert "same local Origin" in response.json()["detail"]
+    assert github.calls == [] and memory.calls == []

@@ -60,7 +60,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 secure=request.url.scheme == "https",
             )
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # Native form POSTs can carry Origin: null under no-referrer, breaking
+        # the strict same-origin write guard. This preserves their local origin
+        # while still withholding referrers from external sites.
+        response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Cache-Control"] = "no-store"
         if request.url.path.startswith(("/procedures", "/memory")):
             response.headers["Content-Security-Policy"] = (
