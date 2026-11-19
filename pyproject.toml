@@ -39,6 +39,7 @@ packages = ["src/helheim"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "integration: reaches a real MCP server and needs a stored token",

@@ -1,0 +1,340 @@
+{
+  "fidelity": "rung-1 captured synthetic real-Munnin output",
+  "captured": "2026-11-19T01:55:18.193256+00:00",
+  "body": "\n### 2026-11-17 11.00\nFirst \u00e9\r\n\n---\n\n### 2026-11-16 10.00\nMiddle \ud83c\udf31\n\n---\n\n### 2026-11-17 11.00\nLast \u7d42\n",
+  "pages": [
+    {
+      "uuid": "11111111111141118111111111111111",
+      "agent_id": "meta",
+      "record_type": "episode",
+      "project": null,
+      "title": "Disposable browser fixture",
+      "content_summary": "Temporary local UI verification",
+      "tags": [
+        "fixture"
+      ],
+      "created_date": "2026-11-18T06:33:59+00:00",
+      "modified_date": "2026-11-18T14:29:20+00:00",
+      "archived_date": null,
+      "content": "\n### 2026-11-17 11.00\nFirst \u00e9\r\n\n---\n\n### 2026-11-17 11.00\nLast \u7d42\n",
+      "blocks_returned": 1,
+      "blocks_total": 2,
+      "next_cursor": "2026-11-16 10.00",
+      "edit_context": {
+        "uuid": "11111111111141118111111111111111",
+        "tenant": "fixture-owner",
+        "revision": "v1:5f3cb8d9d4231ee0f7a140fdc473b9279f1d093b022b9d93acb662d30303bb9e"
+      },
+      "edit_body": {
+        "sha256": "dd875932a52eeaa68bf3b81fb37d56d28adc2194e1a4160e88407f52c7840658",
+        "characters": 101,
+        "segments": [
+          {
+            "source_start": 0,
+            "characters": 37
+          },
+          {
+            "source_start": 73,
+            "characters": 28
+          }
+        ]
+      }
+    },
+    {
+      "uuid": "11111111111141118111111111111111",
+      "agent_id": "meta",
+      "record_type": "episode",
+      "project": null,
+      "title": "Disposable browser fixture",
+      "content_summary": "Temporary local UI verification",
+      "tags": [
+        "fixture"
+      ],
+      "created_date": "2026-11-18T06:33:59+00:00",
+      "modified_date": "2026-11-18T14:29:20+00:00",
+      "archived_date": null,
+      "content": "### 2026-11-16 10.00\nMiddle \ud83c\udf31\n\n---\n\n",
+      "blocks_returned": 1,
+      "blocks_total": 2,
+      "next_cursor": null,
+      "edit_context": {
+        "uuid": "11111111111141118111111111111111",
+        "tenant": "fixture-owner",
+        "revision": "v1:5f3cb8d9d4231ee0f7a140fdc473b9279f1d093b022b9d93acb662d30303bb9e"
+      },
+      "edit_body": {
+        "sha256": "dd875932a52eeaa68bf3b81fb37d56d28adc2194e1a4160e88407f52c7840658",
+        "characters": 101,
+        "segments": [
+          {
+            "source_start": 37,
+            "characters": 36
+          }
+        ]
+      }
+    }
+  ],
+  "query": [
+    {
+      "uuid": "11111111111141118111111111111111",
+      "agent_id": "meta",
+      "record_type": "episode",
+      "project": null,
+      "title": "Disposable browser fixture",
+      "content_summary": "Temporary local UI verification",
+      "tags": [
+        "fixture"
+      ],
+      "created_date": "2026-11-18T06:33:59+00:00",
+      "modified_date": "2026-11-18T14:29:20+00:00",
+      "archived_date": null,
+      "blocks_total": 2
+    }
+  ],
+  "schemas": {
+    "get": {
+      "additionalProperties": false,
+      "properties": {
+        "uuid": {
+          "description": "Existing record's full ID or unique UUID prefix of at least 6 hex characters, from query/search/get. UUID matching ignores case and hyphens; ambiguous prefixes are refused. Not an agent domain or project name.",
+          "type": "string"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque next_cursor returned for this same record. Omit or pass null to start at the beginning; an unknown cursor is refused."
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Positive maximum timestamp groups per page, not lines or bytes. Omit or pass null to read up to the configured body-size ceiling."
+        },
+        "include_edit_context": {
+          "default": false,
+          "description": "True adds full UUID, acting tenant and opaque full-row revision for conflict-safe editing. Compare every page's context before enabling Save.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "uuid"
+      ],
+      "type": "object"
+    },
+    "query": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent domain to filter by. Omit or pass null for all agents plus fleet-shared records; naming an agent excludes fleet-shared records."
+        },
+        "record_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact memory type: episode, knowledge, identity, reasoning, emotional, user_profile, ras or coding_reasoning. Omit/null for all types."
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact project name filter. Omit or pass null for all projects."
+        },
+        "include_archived": {
+          "default": false,
+          "description": "Include archived records when true; deleted records never appear.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "edit": {
+      "additionalProperties": false,
+      "properties": {
+        "uuid": {
+          "description": "Existing record's full ID or unique UUID prefix of at least 6 hex characters, from query/search/get. UUID matching ignores case and hyphens; ambiguous prefixes are refused. Not an agent domain or project name.",
+          "type": "string"
+        },
+        "old_string": {
+          "description": "Exact body text to replace, including whitespace. Must occur once unless replace_all is true; absent or ambiguous matches are refused.",
+          "type": "string"
+        },
+        "new_string": {
+          "description": "Replacement body text, verbatim. Use an empty string to remove the match.",
+          "type": "string"
+        },
+        "replace_all": {
+          "default": false,
+          "description": "False requires a unique match; true replaces every exact occurrence.",
+          "type": "boolean"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque revision from get(include_edit_context=true). Supply together with expected_tenant; stale saves are refused without changes."
+        },
+        "expected_tenant": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Acting tenant from the same edit_context, a precondition not a selector. Supply together with expected_revision."
+        }
+      },
+      "required": [
+        "uuid",
+        "old_string",
+        "new_string"
+      ],
+      "type": "object"
+    },
+    "edit_metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "uuid": {
+          "description": "Existing record's full ID or unique UUID prefix of at least 6 hex characters, from query/search/get. UUID matching ignores case and hyphens; ambiguous prefixes are refused. Not an agent domain or project name.",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "New nonblank display title; omit/null to keep it. Use clearing to remove it."
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Replacement tag list; [] empties it. Omit/null to keep existing tags."
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "New nonblank project name; omit/null to keep it. Use clearing to remove it."
+        },
+        "content_summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "New nonblank authored summary; omit/null to keep it. Use clearing to remove it. Maximum 1000 Unicode characters; longer input is rejected, never truncated. Aim for 300-500 characters."
+        },
+        "clearing": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fields to set to null: title, tags, project and/or content_summary. Omit/null to clear nothing; do not also supply a replacement for a cleared field."
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque revision from get(include_edit_context=true). Supply together with expected_tenant; stale saves are refused without changes."
+        },
+        "expected_tenant": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Acting tenant from the same edit_context, a precondition not a selector. Supply together with expected_revision."
+        }
+      },
+      "required": [
+        "uuid"
+      ],
+      "type": "object"
+    }
+  }
+}
