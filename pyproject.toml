@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dependencies = [
-    "procedure-composer==0.1.0",
+    "procedure-composer==0.2.0",
     "pydantic>=2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
@@ -21,7 +21,7 @@ helheim = "helheim.__main__:main"
 
 [tool.uv.sources]
 # Pin the installed renderer independently of the source branch being edited.
-procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git", rev = "6412c4dc47606f1d63807d33d4aa14cce013231d", subdirectory = "packages/procedure-composer" }
+procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git", rev = "669553c7986b2082316c2ef03d2d7c6cff3c9e2e", subdirectory = "packages/procedure-composer" }
 
 [dependency-groups]
 dev = [

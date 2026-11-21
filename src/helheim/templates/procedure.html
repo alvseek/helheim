@@ -23,6 +23,14 @@
         <option value="markdown" {% if backend == "markdown" %}selected{% endif %}>Markdown</option>
       </select>
     </label>
+    <label>Document
+      <select name="document">
+        <option value="">Composed instructions only</option>
+        {% for row in documents[backend] %}
+          <option value="{{ row.id }}" {% if original and row.id == original.id %}selected{% endif %}>{{ row.kind }} · {{ row.id }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <label>Revision
       <select name="revision">
         <option value="branch" {% if revision == "branch" %}selected{% endif %}>Workspace branch</option>
@@ -31,27 +39,34 @@
     </label>
     <button class="button" type="submit">View</button>
   </form>
+  {% if document_unavailable %}
+    <p class="notice">The selected document is not available in this view. Showing composed
+      instructions only.</p>
+  {% endif %}
   {% if validation_errors[backend] %}
     <p class="notice">Draft validation failed: unresolved operations
       {{ validation_errors[backend]|join(", ") }}. This draft is not ready to publish.</p>
   {% endif %}
   {% if original %}
     <section class="source-editor" {% if init %}data-editor-init='{{ init|tojson }}'{% endif %}>
-      <h3>Original source: <code>{{ original.id }}</code></h3>
-      <p><code>{{ original.source }}</code></p>
-      {% if original.backend_applicability|length == 2 %}
-        <p class="notice">Shared source: saving changes both Markdown and DB delivery.</p>
+      <h3>Owning document: <code>{{ original.id }}</code> ({{ original.kind }})</h3>
+      <p><code>{{ original.path }}</code></p>
+      {% if span %}<p class="subtle">Opened from the <code>{{ span }}</code> reference; the editor
+        holds the complete owning document, and saving rewrites that whole file.</p>{% endif %}
+      {% if applicability|length == 2 %}
+        <p class="notice">Shared document: saving changes both Markdown and DB delivery.</p>
       {% else %}
-        <p class="notice quiet">This source applies to {{ original.backend_applicability|join(", ") }}.</p>
+        <p class="notice quiet">This document is delivered to {{ applicability|join(", ") }} only.</p>
       {% endif %}
-      <p class="subtle">Catalog dependents (including declared legacy consumers):
-        {{ dependents|join(", ") }}</p>
+      <p class="subtle">Full-file impact — saving this document changes
+        {{ dependents|length }} delivered procedure(s): {{ dependents|join(", ") }}.
+        Other regions of this file travel with it.</p>
       {% if init %}
-        <label for="source-draft">Plain Markdown source</label>
-        <textarea id="source-draft" rows="18" spellcheck="false">{{ original.text }}</textarea>
+        <label for="source-draft">Complete Markdown source</label>
+        <textarea id="source-draft" rows="26" spellcheck="false">{{ original_text }}</textarea>
         <div class="editor-actions">
           <button class="button" data-source-action="preview">Preview both backends</button>
-          <button class="button" data-source-action="save" disabled>Save section to draft PR</button>
+          <button class="button" data-source-action="save" disabled>Save document to draft PR</button>
           <span data-source-dirty class="subtle">Saved baseline</span>
         </div>
         <div data-workspace="{{ workspace.id }}">
@@ -60,30 +75,32 @@
           <a data-pr-link {% if workspace.pull_url|github_url %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %} target="_blank" rel="noopener noreferrer">Open draft PR</a>
           <p data-status role="status" aria-live="polite"></p>
         </div>
-        <p><a href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;source_id={{ original.id|urlencode }}" target="_blank" rel="noopener noreferrer">Open latest source in a new tab; keep this draft here</a></p>
+        <p><a href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ original.id|urlencode }}" target="_blank" rel="noopener noreferrer">Open the latest document in a new tab; keep this draft here</a></p>
         <section data-source-preview hidden>
-          <h4>Changes</h4><pre class="editor-preview" data-source-diff></pre>
+          <h4>Whole-document changes</h4><pre class="editor-preview" data-source-diff></pre>
+          <p class="subtle" data-preview-impact></p>
           <h4>DB preview</h4><pre class="editor-preview" data-preview-db></pre>
           <h4>Markdown preview</h4><pre class="editor-preview" data-preview-markdown></pre>
         </section>
       {% else %}
         <p class="notice quiet">The base snapshot is read-only. Choose the workspace branch to edit.</p>
-        <pre class="editor-preview">{{ original.text }}</pre>
+        <pre class="editor-preview">{{ original_text }}</pre>
       {% endif %}
     </section>
   {% endif %}
   <h3 data-composed-label>Composed instructions · {{ backend }}</h3>
   <div data-source-composed>
-  {% for section in rendered[backend].sections %}
+  {% for piece in rendered[backend].spans %}
     <section class="source-section">
       <div class="source-provenance">
-        <code>{{ section.id }}</code> · <code>{{ section.source }}</code>
-        {% if section.backend_applicability|length == 2 %}<span class="badge">Shared</span>{% endif %}
+        <code>{{ piece.id or piece.kind }}</code> · <code>{{ piece.path }}</code>
+        {% if piece.backend_applicability|length == 2 %}<span class="badge">Shared</span>{% endif %}
+        {% if piece.target %}<span class="subtle">region {{ piece.target }}</span>{% endif %}
         {% if revision == "branch" %}
-          <a class="button" href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;source_id={{ section.id|urlencode }}">Edit source</a>
+          <a class="button" href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ piece.document_id|urlencode }}{% if piece.id %}&amp;span={{ piece.id|urlencode }}{% endif %}">Edit document</a>
         {% endif %}
       </div>
-      <pre class="editor-preview">{{ section.text }}</pre>
+      <pre class="editor-preview">{{ piece.text }}</pre>
     </section>
   {% endfor %}
   </div>

@@ -19,14 +19,50 @@ from qa import bench
 
 BASE = "a" * 40
 TREE = "1" * 40
+STORE = "procedures/memory/storage-backends/db.md"
+MARKDOWN_STORE = "procedures/memory/storage-backends/markdown.md"
+RULES = "procedures/components/rules.md"
+FLOW = "procedures/flow.md"
+
+
+def document(identity, kind, body):
+    return (
+        "+++\n"
+        "format_version = 2\n"
+        f'id = "{identity}"\n'
+        f'kind = "{kind}"\n'
+        'title = "Flow"\n'
+        'description = "Do it."\n'
+        "+++\n"
+        f"{body}"
+    ).encode()
+
+
+def backend(read, write):
+    return (
+        f'@start region id="flow.read"\n{read}\n@end region\n\n'
+        f'@start region id="flow.write"\n{write}\n@end region\n'
+    ).encode()
+
+
+FLOW_BODY = (
+    "## Procedure\n\nRead, then write.\n\n"
+    '@start storage id="flow.read" '
+    'ref="procedures/memory/storage-backends/{backend}.md" target="flow.read"\n'
+    "@end storage\n\n"
+    "Then continue.\n\n"
+    '@start component id="flow.rules" ref="procedures/components/rules.md"\n'
+    "@end component\n\n"
+    '@start storage id="flow.write" '
+    'ref="procedures/memory/storage-backends/{backend}.md" target="flow.write"\n'
+    "@end storage\n"
+)
+
 FILES = {
-    "procedures/assemblies/flow.toml": (
-        b'format_version=1\nid="flow"\ntitle="Flow"\ndescription="Do it."\n'
-        b'[[sections]]\nid="first"\nsource="procedures/sections/first.md"\n'
-        b'[[sections]]\nid="second"\nsource="procedures/sections/second.md"\n'
-    ),
-    "procedures/sections/first.md": b"alpha\n",
-    "procedures/sections/second.md": b"beta\n",
+    FLOW: document("flow", "procedure", FLOW_BODY),
+    RULES: document("rules", "component", "Shared rules.\n"),
+    STORE: backend("DB read", "DB write"),
+    MARKDOWN_STORE: backend("MD read", "MD write"),
 }
 
 

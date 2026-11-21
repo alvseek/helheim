@@ -142,14 +142,15 @@ class GitHub:
         payload = self.request(f"{self.repository.api}/git/trees/{tree}?recursive=1")
         if payload.get("truncated") or not isinstance(payload.get("tree"), list):
             raise GitError("GitHub tree is incomplete; source editing is unavailable")
-        directories = tuple(self.repository.path(f"procedures/{part}")
-                            for part in ("assemblies", "sections"))
-        ancestors = {"/".join(directory.split("/")[:i])
-                     for directory in directories for i in range(1, len(directory.split("/")) + 1)}
+        # Whole owning documents live anywhere beneath procedures/: procedures, components
+        # and the consolidated storage-backend files. Nothing outside that tree is a
+        # catalogue source, and no link or submodule is ever followed.
+        root = self.repository.path("procedures")
+        ancestors = {"/".join(root.split("/")[:i]) for i in range(1, root.count("/") + 2)}
         files = {}
         for entry in payload["tree"]:
             path = entry.get("path", "")
-            selected = any(path.startswith(directory + "/") for directory in directories)
+            selected = path.startswith(root + "/")
             if not selected and path not in ancestors:
                 continue
             if entry.get("mode") in ("120000", "160000"):
@@ -174,8 +175,8 @@ class GitHub:
                 self._blobs[blob_id] = raw
             prefix = self.repository.catalog_root + "/" if self.repository.catalog_root else ""
             files[path.removeprefix(prefix)] = raw
-        if not any(path.startswith("procedures/assemblies/") for path in files):
-            raise GitError("this revision has no supported procedure assembly catalog")
+        if not any(path.startswith("procedures/") for path in files):
+            raise GitError("this revision has no supported procedure document catalog")
         snapshot = MemorySource(files)
         self._snapshots[commit] = snapshot
         return snapshot
@@ -188,13 +189,13 @@ class GitHub:
             raise GitUncertain("branch creation was not confirmed; reconcile before retrying")
 
     def commit(self, branch: str, expected_head: str, path: str, content: bytes, save_id: str):
-        prefix = self.repository.path("procedures/sections") + "/"
+        prefix = self.repository.path("procedures") + "/"
         if (
             not path.startswith(prefix) or not path.endswith(".md")
             or "\\" in path or ":" in path
             or any(part in ("", ".", "..") for part in path.split("/"))
         ):
-            raise GitError("write target is outside the configured source-section directory")
+            raise GitError("write target is outside the configured procedure document tree")
         mutation = """mutation($input:CreateCommitOnBranchInput!){
           createCommitOnBranch(input:$input){commit{oid url}}
         }"""

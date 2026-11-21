@@ -162,8 +162,10 @@ class Element {
 
 function editor(kind, original) {
   const state = kind === "source"
-    ? { kind, id: "workspace", original, head: "head-0", source_hash: "hash-0",
-      procedure: "wrap-up", backend: "db", source_id: "section" }
+    ? { kind, id: "workspace", original, head: "head-0", document_hash: "hash-0",
+      procedure: "wrap-up", backend: "db", document_id: "db",
+      document_kind: "backend", document_path: "procedures/memory/storage-backends/db.md",
+      span: "wrap-up.report" }
     : { kind, id: "memory", body: original,
       context: { uuid: "uuid", tenant: "tenant", revision: "revision-0" } };
   const root = new Element({ editorInit: JSON.stringify(state) });
@@ -227,8 +229,11 @@ function editor(kind, original) {
       }
       revision++;
       const result = kind === "source"
-        ? { status: "saved", head: "head-" + revision, source_hash: "hash-" + revision,
-          workspace: {}, sections: { db: [] }, rendered: { db: body.draft, markdown: body.draft }, diff: "" }
+        ? { status: "saved", head: "head-" + revision,
+          document: { id: "db", kind: "backend",
+            path: "procedures/memory/storage-backends/db.md", sha256: "hash-" + revision },
+          workspace: {}, spans: { db: [] }, rendered: { db: body.draft, markdown: body.draft },
+          diff: "" }
         : { saved: body.action, edit_context: { uuid: "uuid", tenant: "tenant", revision: "revision-" + revision },
           metadata: body.action === "metadata" ? body.draft : { title: "before" }, preview: body.draft, diff: "" };
       return { ok: true, json: async () => result };
@@ -285,8 +290,11 @@ for (const kind of ["source", "memory"]) {
       await app.click(area, "save");
       assert.equal(app.requests.at(-1).body.draft, expected.replace("β", "B"));
       assert.equal(app.dirty(), false);
-      if (kind === "source") assert.match(app.requests.at(-1).body.expected_head, /^head-/);
-      else assert.match(app.requests.at(-1).body.expected_revision, /^revision-/);
+      if (kind === "source") {
+        assert.match(app.requests.at(-1).body.expected_head, /^head-/);
+        assert.match(app.requests.at(-1).body.expected_document_hash, /^hash-/);
+        assert.equal(app.requests.at(-1).body.document, "db");
+      } else assert.match(app.requests.at(-1).body.expected_revision, /^revision-/);
     });
   }
   test(kind + ": revert and failed save retain baseline and draft", async () => {

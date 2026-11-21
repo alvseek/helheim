@@ -5,7 +5,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 from test_memory_editor import Server as FakeMemory
-from test_workspaces import BASE, FakeGitHub
+from test_workspaces import BASE, FILES, FakeGitHub
 
 from helheim.app import create_app
 from helheim.config import Server, Settings
@@ -15,6 +15,8 @@ from helheim.memory_editor import MemoryEditor
 from helheim.workspaces import Workspaces, WorkspaceStore
 
 ORIGIN = "http://127.0.0.1:8765"
+STORE_PATH_BYTES = FILES["procedures/memory/storage-backends/db.md"]
+FLOW_PATH_BYTES = FILES["procedures/flow.md"]
 
 
 @pytest.fixture
@@ -45,9 +47,16 @@ def initial(page):
 def source_request(state, draft):
     return {
         "procedure": state["procedure"], "backend": state["backend"],
-        "source_id": state["source_id"], "draft": draft,
-        "expected_head": state["head"], "expected_source_hash": state["source_hash"],
+        "document": state["document_id"], "draft": draft,
+        "expected_head": state["head"],
+        "expected_document_hash": state["document_hash"],
     }
+
+
+def textarea(page):
+    found = re.search(r'<textarea id="source-draft"[^>]*>(.*?)</textarea>', page.text, re.S)
+    assert found is not None, page.text
+    return html.unescape(found.group(1))
 
 
 def workspace(client, headers):
@@ -60,37 +69,85 @@ def workspace(client, headers):
 def test_source_view_preview_and_save_are_distinct(rig):
     app, client, headers, github, memory = rig
     path = workspace(client, headers)
-    page = client.get(path + "?source_id=first")
+    composed = client.get(path)
+    assert composed.status_code == 200
+    assert "Owning document" not in composed.text
+    assert github.calls == []
+
+    page = client.get(path + "?document=db")
     state = initial(page)
-    assert "Shared source: saving changes both" in page.text
+    assert "Owning document" in page.text and "Save document to draft PR" in page.text
+    assert "delivered to db only" in page.text
+    assert textarea(page).encode("utf-8") == STORE_PATH_BYTES
+    assert "Edit document" in page.text
     assert "Preview, not deployed content" in page.text
     assert github.calls == []
+
+    shared = client.get(path + "?document=flow")
+    assert "Shared document: saving changes both" in shared.text
+    assert textarea(shared).encode("utf-8") == FLOW_PATH_BYTES
+
     invalid_identity = source_request(state, "Must not be written\n")
-    invalid_identity["source_id"] = "../not-a-declared-source"
+    invalid_identity["document"] = "../not-a-declared-document"
     refused = client.post(path + "/save", json=invalid_identity, headers=headers)
     assert refused.status_code == 400 and github.calls == []
+    revision_draft = STORE_PATH_BYTES.decode("utf-8").replace(
+        "DB read", "Unsaved § missing-op"
+    )
     preview = client.post(path + "/preview",
-                          json=source_request(state, "Unsaved § missing-op\n"), headers=headers)
+                          json=source_request(state, revision_draft), headers=headers)
     assert preview.status_code == 200
-    assert preview.json()["rendered"]["db"] == "Unsaved § missing-op\nbeta\n"
+    assert "Unsaved § missing-op\n" in preview.json()["rendered"]["db"]
     assert preview.json()["validation_errors"]["db"] == ["missing-op"]
+    assert preview.json()["dependents"] == ["flow"]
+    assert preview.json()["applicability"] == ["db"]
     assert github.calls == []
+    saved_draft = STORE_PATH_BYTES.decode("utf-8").replace("DB read", "Saved read")
     saved = client.post(
-        path + "/save", json=source_request(state, "Saved alpha\n"), headers=headers
+        path + "/save", json=source_request(state, saved_draft), headers=headers
     )
     assert saved.status_code == 200 and saved.json()["status"] == "saved"
     assert saved.json()["head"] != BASE
+    assert saved.json()["document"]["path"] == "procedures/memory/storage-backends/db.md"
     assert github.calls.count("commit") == 1
     duplicate = client.post(path + "/save",
-                            json=source_request(state, "Saved alpha\n"), headers=headers)
+                            json=source_request(state, saved_draft), headers=headers)
     assert duplicate.status_code == 409 and github.calls.count("commit") == 1
-    second = initial(client.get(path + "?source_id=second"))
+    rules_page = client.get(path + "?document=rules")
+    component = initial(rules_page)
+    assert component["document_path"] == "procedures/components/rules.md"
+    assert component["document_kind"] == "component"
+    assert textarea(rules_page).encode("utf-8") == FILES["procedures/components/rules.md"]
+    rules_draft = FILES["procedures/components/rules.md"].decode("utf-8").replace(
+        "Shared rules.", "Saved rules."
+    )
     response = client.post(path + "/save",
-                           json=source_request(second, "Saved beta\n"), headers=headers)
+                           json=source_request(component, rules_draft), headers=headers)
     assert response.status_code == 200 and response.json()["workspace"]["pull_number"] == 1
-    assert "Saved alpha\n" in response.json()["sections"]["db"][0]["text"]
+    assert response.json()["document"]["path"] == "procedures/components/rules.md"
     assert github.calls.count("branch") == 1 and github.calls.count("commit") == 2
     assert app.state.store.list() == []
+
+
+@pytest.mark.parametrize(
+    ("document", "notice"), [("", False), ("db", True)],
+)
+def test_view_falls_back_to_composed_instructions(rig, document, notice):
+    _, client, headers, github, _ = rig
+    path = workspace(client, headers)
+    state = initial(client.get(path, params={"document": "db"}))
+
+    page = client.get(path, params={"backend": "markdown", "document": document})
+    assert page.status_code == 200, page.text
+    assert "Composed instructions · markdown" in page.text
+    assert "Owning document" not in page.text
+    assert ("selected document is not available" in page.text) is notice
+
+    body = source_request(state, "Must not be written\n")
+    body.update(backend="markdown", document=document)
+    for action in ("preview", "save"):
+        assert client.post(f"{path}/{action}", json=body, headers=headers).status_code == 400
+    assert github.calls == []
 
 
 def test_memory_saves_are_guarded_and_not_written_to_history(rig):
@@ -130,12 +187,12 @@ WRITES = [
     ("/s/munnin/t/edit", {}),
     ("/procedures/workspaces", {"repository": "core"}),
     ("/procedures/workspace/preview", {
-        "procedure": "flow", "backend": "db", "source_id": "first", "draft": "x",
-        "expected_head": BASE, "expected_source_hash": "hash",
+        "procedure": "flow", "backend": "db", "document": "db", "draft": "x",
+        "expected_head": BASE, "expected_document_hash": "hash",
     }),
     ("/procedures/workspace/save", {
-        "procedure": "flow", "backend": "db", "source_id": "first", "draft": "x",
-        "expected_head": BASE, "expected_source_hash": "hash",
+        "procedure": "flow", "backend": "db", "document": "db", "draft": "x",
+        "expected_head": BASE, "expected_document_hash": "hash",
     }),
     ("/procedures/workspace/retry-pr", {}),
     ("/procedures/workspace/reconcile", {}),

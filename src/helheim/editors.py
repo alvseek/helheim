@@ -34,10 +34,10 @@ class NewWorkspace(EditorInput):
 class SourceDraft(EditorInput):
     procedure: str
     backend: Literal["markdown", "db"]
-    source_id: str
+    document: str
     draft: str
     expected_head: str
-    expected_source_hash: str
+    expected_document_hash: str
 
 
 class MemoryDraft(EditorInput):
@@ -120,48 +120,60 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     async def procedure(
         identity: str, request: Request, procedure: str | None = None,
         backend: Literal["markdown", "db"] = "db",
-        revision: Literal["branch", "base"] = "branch", source_id: str | None = None,
+        revision: Literal["branch", "base"] = "branch",
+        document: str | None = None, span: str | None = None,
     ):
         view = await run_in_threadpool(
-            app.state.workspaces.preview, identity, procedure, backend, source_id, None, revision
+            app.state.workspaces.preview, identity, procedure, backend, document or None,
+            revision=revision, allow_missing_document=True,
         )
         original = view["original"]
         init = None
         if original and revision == "branch":
             init = {
                 "kind": "source", "id": identity, "procedure": view["procedure"],
-                "backend": backend, "source_id": original.id,
-                "head": view["head"], "source_hash": original.source_hash,
-                "original": original.text,
+                "backend": backend, "document_id": original.id,
+                "document_kind": original.kind, "document_path": original.path,
+                "span": span,
+                "head": view["head"], "document_hash": original.sha256,
+                "original": view["original_text"],
                 "pending": bool(view["workspace"]["pending_action"]
                                 or view["workspace"]["pending_pr"]),
             }
         return templates.TemplateResponse(request, "procedure.html", {
-            **view, "backend": backend, "composer_version": composer_version, "init": init,
+            **view, "backend": backend, "span": span,
+            "document_unavailable": bool(document) and original is None,
+            "composer_version": composer_version, "init": init,
         })
 
     @app.post("/procedures/{identity}/preview")
     async def preview_source(identity: str, body: SourceDraft):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, body.procedure, body.backend,
-            body.source_id, body.draft,
+            body.document, body.draft,
         )
+        original = view["original"]
         if (view["head"] != body.expected_head
-                or view["original"].source_hash != body.expected_source_hash):
-            raise GitConflict("source changed; draft retained, open the latest source in a new tab")
+                or original.sha256 != body.expected_document_hash):
+            raise GitConflict(
+                "document changed; draft retained, open the latest source in a new tab"
+            )
         return {
             "rendered": {backend: result.text for backend, result in view["rendered"].items()},
             "validation_errors": view["validation_errors"],
-            "diff": difference(view["original"].text, body.draft),
-            "sections": {backend: [asdict(section) for section in result.sections]
-                         for backend, result in view["rendered"].items()},
+            "diff": difference(view["original_text"], body.draft),
+            "spans": {backend: [asdict(span) for span in result.spans]
+                      for backend, result in view["rendered"].items()},
+            "documents": view["documents"],
+            "dependents": list(view["dependents"]),
+            "applicability": list(view["applicability"]),
         }
 
     @app.post("/procedures/{identity}/save")
     async def save_source(identity: str, body: SourceDraft):
         return await run_in_threadpool(
-            app.state.workspaces.save, identity, body.procedure, body.backend, body.source_id,
-            body.draft, body.expected_head, body.expected_source_hash,
+            app.state.workspaces.save, identity, body.procedure, body.backend, body.document,
+            body.draft, body.expected_head, body.expected_document_hash,
         )
 
     @app.post("/procedures/{identity}/retry-pr")

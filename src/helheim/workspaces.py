@@ -1,4 +1,10 @@
-"""Remote procedure workspaces; local persistence holds references, never source drafts."""
+"""Remote procedure workspaces; local persistence holds references, never source drafts.
+
+One complete Markdown document owns each procedure, component or storage backend. A
+workspace opens that whole document, previews it by replacing the file in an in-memory
+snapshot, and saves the complete blob through the guarded Git adapter. Rendered spans are
+display information; the document bytes are the only write target.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +21,9 @@ from procedure_composer import Catalog, MemorySource
 
 from .github import GitConflict, GitError, GitHub, GitUncertain, Repository
 
+DOCUMENT_FORMAT = 2
+BACKENDS = ("markdown", "db")
+
 
 def digest(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
@@ -25,6 +34,11 @@ def source_bytes(text: str) -> bytes:
         return text.encode("utf-8")
     except (AttributeError, UnicodeError) as exc:
         raise GitError("source must be valid UTF-8 text") from exc
+
+
+def document_row(edit) -> dict:
+    """A JSON-safe view of one owning document: never its bytes."""
+    return {"id": edit.id, "kind": edit.kind, "path": edit.path, "sha256": edit.sha256}
 
 
 class WorkspaceStore:
@@ -40,7 +54,8 @@ class WorkspaceStore:
     def create(self, repository: Repository, commit: str):
         identity = uuid.uuid4().hex
         state = {
-            "id": identity, "version": 0, "repository": asdict(repository),
+            "id": identity, "version": 0, "document_format": DOCUMENT_FORMAT,
+            "repository": asdict(repository),
             "base_oid": commit, "head_oid": commit, "branch": f"helheim/{identity}",
             "branch_created": False, "pull_number": None, "pull_url": None,
             "pending_action": None, "pending_save": None, "pending_pr": False,
@@ -100,6 +115,11 @@ class Workspaces:
 
     def bound(self, identity: str):
         state = self.store.get(identity)
+        if state.get("document_format") != DOCUMENT_FORMAT:
+            raise GitError(
+                "this workspace predates whole-document procedure editing; start a new "
+                "workspace (its local state is kept, never converted)"
+            )
         repository = self.repository(state["repository"]["key"])
         if asdict(repository) != state["repository"]:
             raise GitConflict("repository configuration changed; start a new workspace")
@@ -136,27 +156,60 @@ class Workspaces:
         return state, commit, source, Catalog(source)
 
     @staticmethod
-    def target(catalog: Catalog, procedure: str, backend: str, source_id: str):
+    def document(catalog: Catalog, procedure: str, backend: str, document_id: str,
+                 *, allow_missing: bool = False):
+        """The complete owning document behind one rendered span or selector."""
         if procedure not in catalog.procedures:
             raise GitError("procedure is not in the configured catalog")
-        found = [section for section in catalog.compose(procedure, backend).sections
-                 if section.id == source_id]
-        if not found or len({section.source for section in found}) != 1:
-            raise GitError("source identity is not a unique section of this procedure")
-        return found[0]
+        matches = [edit for edit in catalog.compose(procedure, backend).documents
+                   if edit.id == document_id]
+        if not matches and allow_missing:
+            return None
+        if len(matches) != 1:
+            raise GitError(
+                "document identity is not part of this procedure for this backend"
+            )
+        return matches[0]
 
     @staticmethod
     def overlay(source, path, raw):
-        files = {name: source.read(name) for directory in
-                 ("procedures/assemblies", "procedures/sections")
-                 for name in source.paths(directory)}
+        if not path.startswith("procedures/"):
+            raise GitError("write target is outside the procedure document tree")
+        files = {name: source.read(name) for name in source.paths("procedures")}
         files[path] = raw
         return Catalog(MemorySource(files))
+
+    @classmethod
+    def checked_overlay(cls, source, target, raw):
+        """Replace one whole file, refuse an identity/kind change, validate everything."""
+        catalog = cls.overlay(source, target.path, raw)
+        if target.kind == "backend":
+            catalog.backend_document(target.path)
+        else:
+            document = catalog.documents.get(target.id)
+            if (document is None or document.path != target.path
+                    or document.metadata.kind != target.kind):
+                raise GitError(
+                    "the draft no longer declares the same document identity and kind; "
+                    "save refused"
+                )
+        # Every document and both backends, not only the clicked region.
+        catalog.validate()
+        return catalog
+
+    @staticmethod
+    def applicability(catalog: Catalog, path: str):
+        delivered = []
+        for backend in BACKENDS:
+            if any(any(edit.path == path for edit in catalog.compose(name, backend).documents)
+                   for name in catalog.procedures):
+                delivered.append(backend)
+        return tuple(delivered)
 
     @staticmethod
     def render(catalog, procedure):
         rendered = {selected: catalog.compose(procedure, selected)
-                    for selected in ("markdown", "db")}
+                    for selected in BACKENDS}
         errors = {}
         for selected, result in rendered.items():
             referenced = set(re.findall(r"§\s*([a-z][a-z0-9-]*)", result.text))
@@ -164,26 +217,34 @@ class Workspaces:
             errors[selected] = sorted(referenced - defined)
         return rendered, errors
 
-    def preview(self, identity, procedure, backend, source_id=None, draft=None, revision="branch"):
+    def preview(self, identity, procedure, backend, document_id=None, draft=None,
+                revision="branch", *, allow_missing_document=False):
         state, head, source, catalog = self.snapshot(identity, revision)
         if not catalog.procedures:
             raise GitError("this revision contains no procedures")
         procedure = procedure or catalog.procedures[0]
+        if procedure not in catalog.procedures:
+            raise GitError("procedure is not in the configured catalog")
         original = None
-        if source_id is not None:
-            original = self.target(catalog, procedure, backend, source_id)
+        if document_id is not None:
+            original = self.document(
+                catalog, procedure, backend, document_id,
+                allow_missing=allow_missing_document and draft is None,
+            )
         if draft is not None:
             if original is None:
-                raise GitError("preview needs a declared source identity")
-            catalog = self.overlay(source, original.source, source_bytes(draft))
+                raise GitError("preview needs a declared document identity")
+            catalog = self.checked_overlay(source, original, source_bytes(draft))
         rendered, errors = self.render(catalog, procedure)
         return {
             "workspace": state, "head": head, "catalog": catalog, "original": original,
             "procedure": procedure, "revision": revision,
             "rendered": rendered, "validation_errors": errors,
-            "dependents": catalog.dependents(
-                source_id, source_path=original.source
-            ) if source_id else (),
+            "dependents": catalog.dependents(original.path) if original else (),
+            "documents": {selected: [document_row(edit) for edit in result.documents]
+                          for selected, result in rendered.items()},
+            "applicability": self.applicability(catalog, original.path) if original else (),
+            "original_text": original.raw.decode("utf-8") if original else None,
         }
 
     def _check_pull(self, state, github):
@@ -197,8 +258,8 @@ class Workspaces:
                 "workspace PR is no longer the original open draft; start a new workspace"
             )
 
-    def save(self, identity, procedure, backend, source_id, draft, expected_head,
-             expected_source_hash):
+    def save(self, identity, procedure, backend, document_id, draft, expected_head,
+             expected_document_hash):
         state, github = self.bound(identity)
         if state["pending_action"]:
             raise GitUncertain("a prior save needs reconciliation before another write")
@@ -211,17 +272,18 @@ class Workspaces:
         state, head, source, catalog = self.snapshot(identity)
         if state["version"] != version:
             raise GitConflict("workspace changed while loading; reload before saving")
-        target = self.target(catalog, procedure, backend, source_id)
-        if head != expected_head or target.source_hash != expected_source_hash:
-            raise GitConflict("branch or source changed; draft retained, reload before saving")
+        target = self.document(catalog, procedure, backend, document_id)
+        if head != expected_head or target.sha256 != expected_document_hash:
+            raise GitConflict(
+                "branch or document changed; draft retained, reload before saving"
+            )
         raw = source_bytes(draft)
-        if raw == source.read(target.source):
-            raise GitError("no source changes to save")
-        rendered, validation_errors = self.render(
-            self.overlay(source, target.source, raw), procedure
-        )
+        if raw == source.read(target.path):
+            raise GitError("no document changes to save")
+        overlay = self.checked_overlay(source, target, raw)
+        rendered, validation_errors = self.render(overlay, procedure)
         pending = {"id": uuid.uuid4().hex, "expected_head": head,
-                   "path": target.source, "new_hash": digest(raw)}
+                   "path": target.path, "document_id": target.id, "new_hash": digest(raw)}
         state = self.store.update(
             state, pending_save=pending,
             pending_action="commit" if state["branch_created"] else "create_branch",
@@ -237,7 +299,7 @@ class Workspaces:
             state = self.store.update(state, branch_created=True, pending_action="commit")
         try:
             commit = github.commit(
-                state["branch"], head, github.repository.path(target.source), raw, pending["id"]
+                state["branch"], head, github.repository.path(target.path), raw, pending["id"]
             )
         except GitUncertain:
             raise
@@ -248,10 +310,19 @@ class Workspaces:
             state, head_oid=commit, pending_action=None, pending_save=None, pending_pr=True
         )
         result = self.retry_pull(identity)
+        saved = digest(raw)
         result.update(
-            source_hash=digest(raw), head=commit, validation_errors=validation_errors,
-            sections={backend: [asdict(section) for section in result.sections]
-                      for backend, result in rendered.items()},
+            head=commit, document={"id": target.id, "kind": target.kind,
+                                   "path": target.path, "sha256": saved},
+            validation_errors=validation_errors,
+            dependents=list(overlay.dependents(target.path)),
+            applicability=self.applicability(overlay, target.path),
+            rendered={selected: rendered[selected].text for selected in BACKENDS},
+            spans={selected: [asdict(span) for span in rendered[selected].spans]
+                   for selected in BACKENDS},
+            documents={selected: [document_row(edit)
+                                  for edit in rendered[selected].documents]
+                       for selected in BACKENDS},
         )
         return result
 
@@ -316,7 +387,7 @@ class Workspaces:
         source = github.sources(head)
         if digest(source.read(pending["path"])) != pending["new_hash"]:
             raise GitUncertain(
-                "observed commit does not match the pending source; inspect before retrying"
+                "observed commit does not match the pending document; inspect before retrying"
             )
         return self.store.update(
             state, head_oid=head, branch_created=True, pending_action=None,

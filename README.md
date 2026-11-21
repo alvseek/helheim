@@ -9,7 +9,7 @@ connections and GitHub CLI login.
 | View | What it does | Where a save lands |
 |---|---|---|
 | Inspector | Lists actual tool schemas, sends calls, renders results and keeps replayable history | The called tool's destination; the inspection is stored locally |
-| Procedures | Reads ordered instructions with source provenance; edits original Markdown sections | One editing branch and draft GitHub PR, never a merge or deployment |
+| Procedures | Reads composed instructions with source provenance; opens and saves the complete owning Markdown document | One editing branch and draft GitHub PR, never a merge or deployment |
 | Memory | Browses metadata, verifies a complete body, edits body and metadata independently | Authenticated Munnin operations in the displayed acting account |
 
 GitHub repository rights and memory invitations are independent. Helheim never
@@ -94,21 +94,24 @@ base_ref = "main"
 catalog_root = ""
 ```
 
-`catalog_root` is the directory containing `procedures/assemblies/` and
-`procedures/sections/`, relative to that repository. A submodule is not a writable
-source directory: configure its owning repository instead. Missing, truncated or
-unsupported catalogs are refused.
+`catalog_root` is the directory containing `procedures/`, relative to that repository. A
+submodule is not a writable source directory: configure its owning repository instead.
+Missing, truncated or unsupported catalogs are refused, including the superseded
+fragmented `procedures/assemblies`/`procedures/sections` layout.
 
-Open a workspace, choose a procedure, backend and revision, then use **Edit source**
-on the relevant section. Base snapshots are read-only. The view identifies the
-source commit, composer version, source file and declared dependent procedures.
-Shared-source warnings distinguish edits that affect both backends.
+Open a workspace, choose a procedure, backend and revision, then open the document behind
+a composed span. Each procedure, component and consolidated storage-backend file is one
+complete Markdown document, and the editor shows that whole file rather than the clicked
+region. Base snapshots are read-only. The view identifies the source commit, composer
+version, document path, the clicked reference, and every delivered procedure the file
+affects. Shared-document warnings distinguish edits that change both backends.
 
-Preview combines all saved branch edits with the current unsaved section for both
-backends. Save commits only that declared section with an atomic expected-HEAD
-precondition, then creates or reuses the workspace's draft PR. Semantic errors may
-remain in a saved draft, visibly failing validation; unsafe source identities and
-paths are always refused.
+Preview replaces the complete document in an in-memory snapshot and renders both backends
+for the selected procedure; the diff is over the whole file. Save commits that complete
+blob only, with an atomic expected-HEAD and full-file-hash precondition, then creates or
+reuses the workspace's draft PR. Semantic errors may remain in a saved draft, visibly
+failing validation, while structural errors, changed document identity/kind, unknown
+document identities and unsafe paths are always refused before any write.
 
 If the commit succeeds but the PR is not confirmed, **Retry PR only** never makes
 another source commit. An uncertain write requires **Reconcile save** before a
@@ -161,8 +164,13 @@ with DOM/fetch fixtures, not a native browser.
 
 For unpublished composer development, build its wheel in its own checkout, install
 that wheel explicitly into the test environment, and use `uv run --no-sync` there
-until the immutable Git dependency can be locked. Never commit a dependency path
-that reaches into one private deployment's parent or sibling directories.
+while the change is unpublished; the tracked dependency above always names a published
+immutable revision. Never commit a dependency path that reaches into one private
+deployment's parent or sibling directories.
+
+Helheim requires `procedure-composer==0.2.0` for single-file documents. The Git
+source in `pyproject.toml` and the resolved entry in `uv.lock` pin the exact
+composer revision; the branch open in the editor does not change that dependency.
 
 ## Licence
 

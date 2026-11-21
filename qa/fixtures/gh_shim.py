@@ -75,7 +75,7 @@ def commit_payload(commit):
 
 def tree_payload(tree):
     entries = []
-    for directory in ("procedures", "procedures/assemblies", "procedures/sections"):
+    for directory in ("procedures",):
         entries.append({"path": directory, "mode": "040000", "type": "tree", "sha": "0" * 40})
     for path, blob in sorted(tree.items()):
         entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob})

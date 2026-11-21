@@ -243,37 +243,55 @@
           !dirty() || state.pending || state.reloadRequired || root.dataset.busy === "true";
       };
 
-      function composed(sections, label) {
+      function composed(spans, label) {
         const container = document.querySelector("[data-source-composed]");
         container.replaceChildren();
-        sections.forEach((section) => {
+        spans.forEach((piece) => {
           const block = document.createElement("section");
           block.className = "source-section";
           const heading = document.createElement("div");
           heading.className = "source-provenance";
           const name = document.createElement("code");
-          name.textContent = section.id + " · " + section.source;
+          name.textContent = (piece.id || piece.kind) + " · " + piece.path;
           heading.append(name);
-          if (section.backend_applicability.length === 2) {
+          if (piece.backend_applicability.length === 2) {
             const shared = document.createElement("span");
             shared.className = "badge";
             shared.textContent = "Shared";
             heading.append(shared);
           }
+          if (piece.target) {
+            const region = document.createElement("span");
+            region.className = "subtle";
+            region.textContent = "region " + piece.target;
+            heading.append(region);
+          }
           const edit = document.createElement("a");
           edit.className = "button";
-          edit.textContent = "Edit source";
+          edit.textContent = "Edit document";
           edit.href = "/procedures/" + encodeURIComponent(state.id) + "?procedure=" +
             encodeURIComponent(state.procedure) + "&backend=" + state.backend +
-            "&source_id=" + encodeURIComponent(section.id);
+            "&document=" + encodeURIComponent(piece.document_id) +
+            (piece.id ? "&span=" + encodeURIComponent(piece.id) : "");
           heading.append(edit);
           const content = document.createElement("pre");
           content.className = "editor-preview";
-          content.textContent = section.text;
+          content.textContent = piece.text;
           block.append(heading, content);
           container.append(block);
         });
         document.querySelector("[data-composed-label]").textContent = label;
+      }
+
+      function impact(dependents) {
+        const list = Array.isArray(dependents) ? dependents : [];
+        const line = document.querySelector("[data-preview-impact]");
+        if (line) {
+          line.textContent = "Full-file impact: saving this document changes " +
+            list.length + " delivered procedure(s)" +
+            (list.length ? ": " + list.join(", ") : ".") +
+            " Other regions of the same file travel with it.";
+        }
       }
 
       textarea.addEventListener("input", refresh);
@@ -283,32 +301,35 @@
           const submitted = newlineDraft(state.original, textarea.value);
           try {
             const result = await post("/procedures/" + encodeURIComponent(state.id) + "/" + action, {
-              procedure: state.procedure, backend: state.backend, source_id: state.source_id,
-              draft: submitted, expected_head: state.head, expected_source_hash: state.source_hash,
+              procedure: state.procedure, backend: state.backend,
+              document: state.document_id, draft: submitted,
+              expected_head: state.head, expected_document_hash: state.document_hash,
             });
             if (action === "preview") {
-              if (!result.rendered || !result.sections || !result.sections[state.backend]) {
+              if (!result.rendered || !result.spans || !result.spans[state.backend]) {
                 throw new Error("Preview response is incomplete; nothing was saved.");
               }
               root.querySelector("[data-source-preview]").hidden = false;
               root.querySelector("[data-source-diff]").textContent = result.diff;
+              impact(result.dependents);
               root.querySelector("[data-preview-db]").textContent = result.rendered.db;
               root.querySelector("[data-preview-markdown]").textContent = result.rendered.markdown;
-              composed(result.sections[state.backend], "Unsaved combined preview · " + state.backend);
+              composed(result.spans[state.backend], "Unsaved combined preview · " + state.backend);
               report(actions, "Preview only; nothing was saved." + validation(result.validation_errors), false);
             } else {
               if (!["saved", "saved_pr_pending"].includes(result.status) ||
-                  typeof result.head !== "string" || typeof result.source_hash !== "string" ||
-                  !result.workspace || !result.sections || !result.sections[state.backend]) {
+                  typeof result.head !== "string" || !result.document ||
+                  typeof result.document.sha256 !== "string" ||
+                  !result.workspace || !result.spans || !result.spans[state.backend]) {
                 const error = new Error("Save result is incomplete; outcome unconfirmed.");
                 error.uncertain = true;
                 throw error;
               }
               state.original = submitted;
               state.head = result.head;
-              state.source_hash = result.source_hash;
+              state.document_hash = result.document.sha256;
               document.getElementById("source-head").textContent = result.head;
-              composed(result.sections[state.backend], "Saved branch composition · " + state.backend + " (not deployed)");
+              composed(result.spans[state.backend], "Saved branch composition · " + state.backend + " (not deployed)");
               report(actions, workspaceResult(actions, result) + validation(result.validation_errors),
                 Boolean(result.error));
             }

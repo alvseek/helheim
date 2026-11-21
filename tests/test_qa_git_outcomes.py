@@ -15,10 +15,15 @@ from helheim.app import create_app
 from helheim.config import Settings
 from helheim.github import GitConflict, GitHub, GitUncertain, Repository
 from helheim.workspaces import Workspaces, WorkspaceStore
-from qa.fixtures.git_remote import BASE, GitHubPeer
+from qa.fixtures.git_remote import BASE, FILES, STORE, GitHubPeer
 
 PROJECT = Path(__file__).resolve().parents[1]
 ORIGIN = "http://127.0.0.1:8765"
+
+
+def edited(text):
+    """A whole db.md document whose read region carries this text."""
+    return FILES[STORE].decode("utf-8").replace("DB read", text)
 
 
 @pytest.fixture
@@ -43,7 +48,7 @@ def save(workspaces, state, source, draft):
     view = workspaces.preview(state["id"], "flow", "db", source)
     return workspaces.save(
         state["id"], "flow", "db", source, draft,
-        view["head"], view["original"].source_hash,
+        view["head"], view["original"].sha256,
     )
 
 
@@ -62,20 +67,21 @@ def test_adapter_uses_only_the_owned_gh_process(git):
 def test_lost_or_unreadable_branch_creation_keeps_pending_and_never_adopts(git, fault):
     workspaces, state, store = setup(git)
     git.faults(branch=fault)
-    draft = "unique branch draft\n"
+    draft = edited("unique branch draft")
     with pytest.raises(GitUncertain, match="reconcile"):
-        save(workspaces, state, "first", draft)
+        save(workspaces, state, "db", draft)
     pending = store.get(state["id"])
     assert pending["pending_action"] == "create_branch"
+    assert pending["pending_save"]["path"] == STORE
     assert pending["pending_save"]["new_hash"] == hashlib.sha256(draft.encode()).hexdigest()
-    assert draft not in json.dumps(pending)
+    assert "unique branch draft" not in json.dumps(pending)
     assert git.counters()["branch"] == 1
     assert git.counters()["commit"] == 0
     assert git.state()["branches"][state["branch"]] == BASE
 
     before = len(git.calls())
     with pytest.raises(GitUncertain, match="prior save"):
-        workspaces.save(state["id"], "flow", "db", "second", "refused\n", BASE, "unused")
+        workspaces.save(state["id"], "flow", "db", "rules", edited("refused"), BASE, "unused")
     assert len(git.calls()) == before
     with pytest.raises(GitUncertain, match="never adopt or reset"):
         workspaces.reconcile(state["id"])
@@ -87,24 +93,24 @@ def test_lost_or_unreadable_branch_creation_keeps_pending_and_never_adopts(git, 
 def test_lost_or_unreadable_commit_response_reconciles_without_recommit(git, fault):
     workspaces, state, store = setup(git)
     git.faults(commit=fault)
-    draft = "unique commit draft\n"
+    draft = edited("unique commit draft")
     with pytest.raises(GitUncertain, match="reconcile"):
-        save(workspaces, state, "first", draft)
+        save(workspaces, state, "db", draft)
     pending = store.get(state["id"])
     assert pending["pending_action"] == "commit"
     assert pending["pending_save"]["new_hash"] == hashlib.sha256(draft.encode()).hexdigest()
-    assert draft not in json.dumps(pending)
+    assert "unique commit draft" not in json.dumps(pending)
     assert pending["branch_created"] is True
     assert pending["head_oid"] == BASE
     assert git.counters()["commit"] == 1
     head = git.state()["branches"][state["branch"]]
     assert head != BASE
 
-    second = workspaces.preview(state["id"], "flow", "db", "second")
+    second = workspaces.preview(state["id"], "flow", "db", "rules")
     before = len(git.calls())
     with pytest.raises(GitUncertain, match="prior save"):
-        workspaces.save(state["id"], "flow", "db", "second", "refused\n",
-                        second["head"], second["original"].source_hash)
+        workspaces.save(state["id"], "flow", "db", "rules", edited("refused"),
+                        second["head"], second["original"].sha256)
     assert len(git.calls()) == before
     reconciled = workspaces.reconcile(state["id"])
     assert reconciled["pending_action"] is None
@@ -123,7 +129,7 @@ def test_ambiguous_commit_is_not_adopted_by_reconcile(git):
     workspaces, state, store = setup(git)
     git.faults(commit="lost")
     with pytest.raises(GitUncertain):
-        save(workspaces, state, "first", "ambiguous\n")
+        save(workspaces, state, "db", edited("ambiguous"))
     head = git.state()["branches"][state["branch"]]
     git.mutate_commit(head, message="unrelated")
     with pytest.raises(GitUncertain, match="inspect its history"):
@@ -136,26 +142,28 @@ def test_ambiguous_commit_is_not_adopted_by_reconcile(git):
 @pytest.mark.parametrize("fault", ["500", "unreadable"])
 def test_pull_read_failure_after_commit_is_partial_success(git, fault):
     workspaces, state, store = setup(git)
-    first = save(workspaces, state, "first", "first saved\n")
+    first = save(workspaces, state, "db", edited("first saved"))
     assert first["status"] == "saved"
     first_head = first["workspace"]["head_oid"]
     git.faults(pull_read=fault, pull_read_after=1)
-    second = save(workspaces, state, "second", "second saved\n")
+    second = save(workspaces, state, "db", edited("second saved"))
     assert second["status"] == "saved_pr_pending"
     assert second["error"]
     assert second["workspace"]["pending_pr"] is True
     assert second["workspace"]["head_oid"] != first_head
-    assert second["source_hash"] == hashlib.sha256(b"second saved\n").hexdigest()
+    assert second["document"]["sha256"] == hashlib.sha256(
+        edited("second saved").encode()
+    ).hexdigest()
     assert git.state()["branches"][state["branch"]] == second["head"]
     assert git.counters()["commit"] == 2
     commits = git.counters()["commit"]
 
     git.faults(pull_read=None, pull_read_after=None)
     retried = workspaces.retry_pull(state["id"])
-    assert retried["status"] == "saved"
+    assert git.counters()["commit"] == commits, retried
+    assert retried["status"] == "saved", retried
     assert retried["workspace"]["head_oid"] == second["head"]
     assert retried["workspace"]["pull_number"] == 1
-    assert git.counters()["commit"] == commits
     assert git.state()["pulls"]["1"]["head"]["ref"] == state["branch"]
 
 
@@ -163,11 +171,13 @@ def test_pull_read_failure_after_commit_is_partial_success(git, fault):
 def test_pull_list_failure_after_commit_is_partial_success(git, fault):
     workspaces, state, store = setup(git)
     git.faults(pull_list=fault)
-    result = save(workspaces, state, "first", "first saved\n")
+    result = save(workspaces, state, "db", edited("first saved"))
     assert result["status"] == "saved_pr_pending"
     assert result["error"]
     assert result["workspace"]["pending_pr"] is True
-    assert result["source_hash"] == hashlib.sha256(b"first saved\n").hexdigest()
+    assert result["document"]["sha256"] == hashlib.sha256(
+        edited("first saved").encode()
+    ).hexdigest()
     assert git.counters()["commit"] == 1
     head = result["head"]
     assert git.state()["branches"][state["branch"]] == head
@@ -186,11 +196,12 @@ def test_pull_list_failure_after_commit_is_partial_success(git, fault):
 ])
 def test_existing_pr_refuses_closed_ready_or_wrong_head_base(git, change):
     workspaces, state, store = setup(git)
-    assert save(workspaces, state, "first", "first saved\n")["status"] == "saved"
+    assert save(workspaces, state, "db", edited("first saved"))["status"] == "saved"
     git.mutate_pr(**change)
     before = git.counters()
     with pytest.raises(GitConflict, match="no longer the original open draft"):
-        workspaces.save(state["id"], "flow", "db", "second", "refused\n", BASE, "unused")
+        workspaces.save(state["id"], "flow", "db", "rules", edited("refused"),
+                        BASE, "unused")
     assert git.counters()["commit"] == before["commit"]
     assert git.counters()["branch"] == before["branch"]
     assert git.counters()["pull"] == before["pull"]
@@ -204,7 +215,7 @@ def test_listed_pr_refuses_closed_ready_or_wrong_head_base(git, change):
     workspaces, state, store = setup(git)
     git.faults(commit="lost")
     with pytest.raises(GitUncertain):
-        save(workspaces, state, "first", "first saved\n")
+        save(workspaces, state, "db", edited("first saved"))
     head = git.state()["branches"][state["branch"]]
     workspaces.reconcile(state["id"])
     git.put_pull(state["branch"], **change)
@@ -252,8 +263,8 @@ def visible(page, action):
 def source_request(state, draft):
     return {
         "procedure": state["procedure"], "backend": state["backend"],
-        "source_id": state["source_id"], "draft": draft,
-        "expected_head": state["head"], "expected_source_hash": state["source_hash"],
+        "document": state["document_id"], "draft": draft,
+        "expected_head": state["head"], "expected_document_hash": state["document_hash"],
     }
 
 
@@ -272,15 +283,15 @@ def test_served_uncertain_branch_creation_refuses_adoption_and_reload(git):
         created = client.post("/procedures/workspaces",
                               json={"repository": "core"}, headers=headers)
         path = created.json()["redirect"]
-        page = client.get(path + "?source_id=first")
+        page = client.get(path + "?document=db")
         state = initial(page)
         assert not visible(page, "reconcile") and not visible(page, "retry-pr")
         git.faults(branch="lost")
         refused = client.post(path + "/save",
-                              json=source_request(state, "unsaved branch draft\n"),
+                              json=source_request(state, edited("unsaved branch draft")),
                               headers=headers)
         assert refused.status_code == 409 and refused.json()["uncertain"] is True
-        reloaded = client.get(path + "?source_id=first")
+        reloaded = client.get(path + "?document=db")
         assert reloaded.status_code == 409 and "already exists" in reloaded.text
         checked = client.post(path + "/reconcile", headers=headers)
         assert checked.status_code == 409 and checked.json()["uncertain"] is True
@@ -295,27 +306,27 @@ def test_served_page_offers_retry_pr_after_confirmed_commit(git):
         created = client.post("/procedures/workspaces",
                               json={"repository": "core"}, headers=headers)
         path = created.json()["redirect"]
-        page = client.get(path + "?source_id=first")
+        page = client.get(path + "?document=db")
         state = initial(page)
         git.faults(commit="lost")
         refused = client.post(path + "/save",
-                              json=source_request(state, "saved commit draft\n"),
+                              json=source_request(state, edited("saved commit draft")),
                               headers=headers)
         assert refused.status_code == 409 and refused.json()["uncertain"] is True
-        page = client.get(path + "?source_id=first")
+        page = client.get(path + "?document=db")
         assert visible(page, "reconcile") and not visible(page, "retry-pr")
         reconciled = client.post(path + "/reconcile", headers=headers)
         assert reconciled.status_code == 200
         assert reconciled.json()["workspace"]["pending_pr"] is True
         head = reconciled.json()["workspace"]["head_oid"]
-        page = client.get(path + "?source_id=first")
+        page = client.get(path + "?document=db")
         assert initial(page)["pending"] is True
         assert visible(page, "retry-pr") and not visible(page, "reconcile")
         retried = client.post(path + "/retry-pr", headers=headers)
         assert retried.status_code == 200 and retried.json()["status"] == "saved"
         assert retried.json()["workspace"]["head_oid"] == head
         assert retried.json()["workspace"]["pull_number"] == 1
-        page = client.get(path + "?source_id=first")
+        page = client.get(path + "?document=db")
         assert "https://github.com/owner/repo/pull/1" in page.text
         assert not visible(page, "retry-pr") and not visible(page, "reconcile")
         assert git.counters()["commit"] == 1

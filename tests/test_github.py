@@ -26,7 +26,7 @@ def test_commit_uses_atomic_head_precondition_json_stdin_and_no_shell():
 
     github = GitHub(Repository("core", "owner", "framework"), runner=runner)
     raw = "é\r\n$(never-a-command)\n".encode()
-    assert github.commit("helheim/workspace", OID, "procedures/sections/source.md",
+    assert github.commit("helheim/workspace", OID, "procedures/flow.md",
                          raw, "save-id") == NEXT
     args, options = calls[0]
     assert args[:2] == ["gh", "api"] and "--input" in args
@@ -38,8 +38,8 @@ def test_commit_uses_atomic_head_precondition_json_stdin_and_no_shell():
 
 
 @pytest.mark.parametrize("target", [
-    "../escape.md", "/absolute.md", "procedures/assemblies/flow.toml",
-    "procedures/sections/../../escape.md", r"procedures\sections\source.md",
+    "../escape.md", "/absolute.md", "procedures/flow.toml",
+    "procedures/../../escape.md", r"procedures\flow.md", "elsewhere/flow.md",
 ])
 def test_adapter_confines_writable_paths(target):
     github = GitHub(Repository("core", "owner", "repo"),
@@ -76,7 +76,7 @@ def test_missing_write_response_is_uncertain(output, operation):
         if operation == "branch":
             github.create_branch("branch", OID)
         else:
-            github.commit("branch", OID, "procedures/sections/source.md", b"body", "save")
+            github.commit("branch", OID, "procedures/flow.md", b"body", "save")
     assert "secret-credential" not in str(caught.value)
 
 
@@ -102,7 +102,7 @@ def test_missing_gh_is_not_an_uncertain_write():
 def test_sources_refuse_git_symlinks_and_submodules(mode):
     replies = iter([
         response({"tree": {"sha": NEXT}}),
-        response({"tree": [{"path": "procedures/sections", "mode": mode, "type": "blob"}]}),
+        response({"tree": [{"path": "procedures/memory", "mode": mode, "type": "blob"}]}),
     ])
     github = GitHub(Repository("core", "owner", "repo"),
                     runner=lambda *args, **kwargs: next(replies))
@@ -119,22 +119,29 @@ def test_truncated_tree_is_not_an_empty_catalog():
 
 
 def test_regular_remote_bytes_are_data_and_not_imported():
-    manifest = b'format_version=1\nid="flow"\ntitle="Flow"\ndescription="Do it."\n' \
-               b'[[sections]]\nid="source"\nsource="procedures/sections/source.md"\n'
+    document = (
+        b'+++\nformat_version = 2\nid = "flow"\nkind = "procedure"\n'
+        b'title = "Flow"\ndescription = "Do it."\n+++\n'
+        b'@start storage id="flow.persist" '
+        b'ref="procedures/memory/storage-backends/{backend}.md" target="flow.persist"\n'
+        b"@end storage\n"
+    )
     source = b"Never execute: import os; os.remove('anything')\r\n"
     replies = iter([
         response({"tree": {"sha": NEXT}}),
         response({"tree": [
-            {"path": "procedures/assemblies/flow.toml", "mode": "100644",
+            {"path": "procedures", "mode": "040000", "type": "tree", "sha": "e" * 40},
+            {"path": "procedures/flow.md", "mode": "100644",
              "type": "blob", "sha": "c" * 40},
-            {"path": "procedures/sections/source.md", "mode": "100644",
+            {"path": "procedures/memory/storage-backends/db.md", "mode": "100644",
              "type": "blob", "sha": "d" * 40},
         ]}),
-        response({"encoding": "base64", "content": base64.b64encode(manifest).decode()}),
+        response({"encoding": "base64", "content": base64.b64encode(document).decode()}),
         response({"encoding": "base64", "content": base64.b64encode(source).decode()}),
     ])
     github = GitHub(Repository("core", "owner", "repo"),
                     runner=lambda *args, **kwargs: next(replies))
     snapshot = github.sources(OID)
-    assert snapshot.read("procedures/sections/source.md") == source
+    assert snapshot.read("procedures/flow.md") == document
+    assert snapshot.read("procedures/memory/storage-backends/db.md") == source
     assert github.sources(OID) is snapshot  # Immutable object identity, never a timed cache.
