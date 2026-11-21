@@ -10,7 +10,7 @@ from helheim.config import load_settings
 
 def make_client(tmp_path: Path, monkeypatch) -> TestClient:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
-    return TestClient(create_app(load_settings()))
+    return TestClient(create_app(load_settings()), base_url="http://127.0.0.1:8765")
 
 
 def test_health_reports_the_configured_servers(tmp_path: Path, monkeypatch) -> None:

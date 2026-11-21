@@ -52,7 +52,7 @@ def stored_call(tmp_path, monkeypatch, *, text=None, payload=None):
 def test_existing_history_gets_a_total_and_expandable_section_badges(tmp_path, monkeypatch):
     app, call_id, text, payload = stored_call(tmp_path, monkeypatch)
     original = app.state.store.get(call_id)
-    response = TestClient(app).get(f"/calls/{call_id}")
+    response = TestClient(app, base_url="http://127.0.0.1:8765").get(f"/calls/{call_id}")
     assert response.status_code == 200
     counter = TokenCounter()
     assert f'data-response-tokens="{counter.text(text)}"' in response.text
@@ -69,7 +69,7 @@ def test_large_response_keeps_total_without_building_tree_counts(tmp_path, monke
     def refuse_tree(self, value):
         raise AssertionError("oversized response must not measure tree nodes")
     monkeypatch.setattr(TokenCounter, "value", refuse_tree)
-    body = TestClient(app).get(f"/calls/{call_id}").text
+    body = TestClient(app, base_url="http://127.0.0.1:8765").get(f"/calls/{call_id}").text
     assert f'data-response-tokens="{TokenCounter().text(text)}"' in body
     assert "larger than the render limit" in body
 
@@ -79,7 +79,7 @@ def test_tokenizer_failure_does_not_hide_the_response_or_claim_zero(tmp_path, mo
     def unavailable(*args):
         raise OSError("vocabulary unavailable")
     monkeypatch.setattr("helheim.tokens.tiktoken.get_encoding", unavailable)
-    response = TestClient(app).get(f"/calls/{call_id}")
+    response = TestClient(app, base_url="http://127.0.0.1:8765").get(f"/calls/{call_id}")
     assert response.status_code == 200
     assert "Token count unavailable" in response.text
     assert "reasoning" in response.text

@@ -13,6 +13,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .github import Repository
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_MAX_STORE_BYTES = 200 * 1024 * 1024
@@ -41,6 +43,7 @@ class Settings:
     client_id: str = ""
     max_store_bytes: int = DEFAULT_MAX_STORE_BYTES
     servers: tuple[Server, ...] = ()
+    procedure_repositories: tuple[Repository, ...] = ()
 
     @property
     def tokens_path(self) -> Path:
@@ -59,6 +62,9 @@ class Settings:
             if server.name == name:
                 return server
         return None
+
+    def procedure_repository(self, key: str) -> Repository | None:
+        return next((item for item in self.procedure_repositories if item.key == key), None)
 
 
 def default_home() -> Path:
@@ -98,4 +104,12 @@ def load_settings(path: Path | None = None) -> Settings:
         client_id=app.get("client_id", ""),
         max_store_bytes=int(app.get("max_store_bytes", DEFAULT_MAX_STORE_BYTES)),
         servers=tuple(servers),
+        procedure_repositories=tuple(
+            Repository(
+                key=key, owner=row["owner"], name=row["name"],
+                base_ref=row.get("base_ref", "main"),
+                catalog_root=row.get("catalog_root", ""),
+            )
+            for key, row in raw.get("procedure_repositories", {}).items()
+        ),
     )

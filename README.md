@@ -1,80 +1,47 @@
 # Helheim
 
-A local dashboard for calling cloud MCP tools and reading what comes back.
+A local dashboard for inspecting MCP calls and editing procedure sources and
+existing memory. It runs for one person on loopback, using their existing OAuth
+connections and GitHub CLI login.
 
-It logs in as you against the authorization server each MCP server names, lists
-that server's tools, builds a form from each tool's own input schema, sends the
-call, and renders the answer as a collapsible tree with its byte size, duration and
-token count. Every call is kept locally so it can be reopened or replayed.
+## Choose the job
 
-Nothing runs on a server, nothing sits in an agent's path, and nothing is read
-from another client's files. It is a Postman for MCP, for one person, on one
-machine.
+| View | What it does | Where a save lands |
+|---|---|---|
+| Inspector | Lists actual tool schemas, sends calls, renders results and keeps replayable history | The called tool's destination; the inspection is stored locally |
+| Procedures | Reads composed instructions with source provenance; opens and saves the complete owning Markdown document | One editing branch and draft GitHub PR, never a merge or deployment |
+| Memory | Browses metadata, verifies a complete body, edits body and metadata independently | Authenticated Munnin operations in the displayed acting account |
 
-## What it does
-
-- One page per server, listing the tools that server actually offers right now
-- A form generated from each tool's `inputSchema`: text, number, checkbox, enum,
-  and a JSON textarea for object and array fields
-- The response rendered as nested `<details>` with its byte size and duration, so
-  a 130 KB payload is navigable without JavaScript
-- Every call stored in local SQLite, reopenable, replayable, and capped in bytes
-- Local token counts using tiktoken's `o200k_base`: the total measures the returned
-  text; expandable sections and records measure their compact JSON independently.
-  Counts are not additive or provider-billed conversation usage. Existing history
-  is measured when opened, without changing stored responses. The vocabulary is
-  downloaded and cached on first use; response contents never leave Helheim for
-  counting. If it cannot load, the response stays readable with the count unavailable.
-- Tools that write are labelled. Nothing is blocked.
+GitHub repository rights and memory invitations are independent. Helheim never
+holds a PostgreSQL credential and never executes code fetched from an editing
+branch.
 
 ## Start it
 
 ```sh
+uv sync --locked
 uv run helheim
 ```
 
-Then open <http://127.0.0.1:8765>.
+Open <http://127.0.0.1:8765>. Editing requires a loopback bind; public interfaces
+are refused. Browser writes require a matching Host, Origin and browser-bound
+CSRF token, including the inspector's Send form. Use the remote MCP/HTTP API,
+not Helheim's private UI routes, for non-browser integrations.
 
-## The one manual step: register a client
+## Connect a memory server
 
-The authorization server has no registration endpoint, so a client cannot be
-created by a program. Without one, nothing can be authorized.
+Helheim uses a pre-registered Native OAuth client, without a client secret.
 
-1. In your Logto tenant, create an application of type **Native** called
-   `Helheim`. No secret.
-2. Add the redirect URI `http://127.0.0.1:8765/callback`.
-3. Put its id in `~/.config/helheim/config.toml`:
-
-```toml
-[app]
-client_id = "your-client-id"
-```
-
-If your dashboard listens somewhere else, set `app.port` to match, and register
-the matching redirect URI in the tenant.
-
-## Where it keeps things
-
-| Path | What |
-|---|---|
-| `~/.config/helheim/config.toml` | servers, client id, port, history cap |
-| `~/.config/helheim/tokens.json` | one token per server, including refresh tokens |
-| `~/.config/helheim/helheim.db` | call history |
-
-Set `HELHEIM_HOME` to move all three somewhere else. The token file is written
-with owner-only permissions where the platform honours that; on Windows the
-protection is whatever the user profile provides.
-
-Each server needs its own consent, because a token is bound to that server's
-resource identifier. Connecting munnin does not connect hermod.
-
-## Configuration
+1. Create a Native application named `Helheim` in the authorization server.
+2. Register `http://127.0.0.1:8765/callback`.
+3. Put its client ID in `~/.config/helheim/config.toml`, then use **Connect** in
+   the inspector.
 
 ```toml
 [app]
 host = "127.0.0.1"
 port = 8765
-client_id = ""
+client_id = "your-client-id"
 max_store_bytes = 209715200
 
 [servers.munnin]
@@ -82,23 +49,129 @@ url = "https://munnin.lok.quest/mcp"
 resource = "https://munnin.lok.quest/mcp"
 ```
 
-`hermod` and `einherjar` follow the same shape. A server whose resource is not
-registered in the tenant shows as `refused` rather than breaking the page.
+Custom ports need a matching redirect URI. Each MCP server needs its own consent
+because the token is bound to its resource identifier. Connecting one server does
+not connect another. Additional servers use the same configuration shape.
 
-## Tests
+### Edit existing memory
 
-```sh
-uv run pytest -q                 # unit tests, no network, no token
-uv run pytest -q -m integration  # reaches munnin if a token exists, else skips
+Choose **Memory**, select a configured server, filter metadata or open a record
+by UUID. The editor shows the acting account and resolved record identity.
+
+Save body and Save metadata are separate. Saving either preserves typed drafts
+in the other area. Preview and diff do not write anything. Summaries are not
+generated automatically; `content_summary` remains authored metadata, with a
+1,000-Unicode-character limit enforced by Munnin. Use `null` to clear a metadata
+field and `[]` to empty tags. Ownership, type, sharing and lifecycle are not
+editable here.
+
+Helheim checks the actual tool schemas before enabling editing. A server without
+both revision and tenant preconditions stays read-only. It loads every body page
+under one context, reconstructs original source positions and verifies the complete
+body's hash before enabling Save. A changed account, revoked invitation or stale
+revision refuses the save rather than overwriting someone else's work.
+
+Validation, network and conflict errors leave both browser drafts in place. Open
+the latest record in a new tab to inspect its current baseline without destroying
+them. **Close editor** releases its server baseline after confirming any unsaved
+drafts. Baselines also expire 30 minutes after the last preview/save request.
+At most 32 editors are retained; opening another releases the least recently used
+editor that is not saving. Expiry leaves the browser draft intact, but preview/save
+then asks you to open the latest record in another tab. Typing alone does not
+refresh the server lifetime. Unsaved drafts are not promised to survive a browser
+or app restart.
+
+## Configure procedure sources
+
+Install `gh` and sign in with `gh auth login`. Configure only repositories you
+intend this application to edit:
+
+```toml
+[procedure_repositories.framework]
+owner = "your-github-owner"
+name = "your-framework-repository"
+base_ref = "main"
+catalog_root = ""
 ```
 
-## What it deliberately does not do
+`catalog_root` is the directory containing `procedures/`, relative to that repository. A
+submodule is not a writable source directory: configure its owning repository instead.
+Missing, truncated or unsupported catalogs are refused, including the superseded
+fragmented `procedures/assemblies`/`procedures/sections` layout.
 
-- Intercept or record an agent's traffic
-- Read another client's local storage
-- Guard, confirm or block a call: a write tool writes
-- Compare two responses or diff them across time
+Open a workspace, choose a procedure, backend and revision, then open the document behind
+a composed span. Each procedure, component and consolidated storage-backend file is one
+complete Markdown document, and the editor shows that whole file rather than the clicked
+region. Base snapshots are read-only. The view identifies the source commit, composer
+version, document path, the clicked reference, and every delivered procedure the file
+affects. Shared-document warnings distinguish edits that change both backends.
+
+Preview replaces the complete document in an in-memory snapshot and renders both backends
+for the selected procedure; the diff is over the whole file. Save commits that complete
+blob only, with an atomic expected-HEAD and full-file-hash precondition, then creates or
+reuses the workspace's draft PR. Semantic errors may remain in a saved draft, visibly
+failing validation, while structural errors, changed document identity/kind, unknown
+document identities and unsafe paths are always refused before any write.
+
+If the commit succeeds but the PR is not confirmed, **Retry PR only** never makes
+another source commit. An uncertain write requires **Reconcile save** before a
+retry. Existing branch collisions, closed/merged PRs and PRs no longer in draft
+state are not silently reset or reused.
+
+Saving is not publication. Review and merge the source PR separately, then follow
+the consuming compiler/server's normal package/submodule and release process.
+Helheim pins its installed composer independently of the source branch being edited;
+it does not download a branch's Python code to render a preview. Hermod can adopt
+the package API separately; this feature does not migrate or deploy Hermod.
+
+## Local state and privacy
+
+| Location | Contents |
+|---|---|
+| `~/.config/helheim/config.toml` | Server/source configuration, OAuth client ID and port |
+| `~/.config/helheim/tokens.json` | Per-server access/refresh tokens |
+| `~/.config/helheim/helheim.db` | Inspector history and procedure workspace references/revisions |
+| Process memory | Memory-editing baselines and immutable Git source caches |
+| Browser page | Unsaved text drafts |
+
+`HELHEIM_HOME` moves the local files. Token-file permissions are owner-only where
+the platform supports them; Windows also relies on the user-profile permissions.
+New editor calls are not inserted into generic inspector history, and procedure
+workspace rows do not store source drafts or GitHub credentials.
+
+Inspector calls remain deliberately replayable and byte-capped. Results show
+duration, byte size and local `o200k_base` token counts. Section counts are independent,
+not additive or provider-billed usage; existing history is measured without being
+rewritten. The vocabulary is downloaded on first use, but response contents never
+leave Helheim for counting. An unavailable vocabulary does not hide a response.
+
+## Develop and verify
+
+```sh
+uv run pytest -q -m "not integration"
+uv run pytest -q -m integration
+uv run ruff check
+```
+
+The integration marker reaches the configured real server only when its required
+token exists. Passing unit tests is not proof of a real GitHub write, an issuer
+exchange or browser behavior.
+
+The editor JavaScript regressions require Node.js 18+ and run automatically from
+pytest (with an explicit skip reason if Node is unavailable). Run them directly
+with `node --test tests/editors_newlines.test.cjs`; they execute the shipped script
+with DOM/fetch fixtures, not a native browser.
+
+For unpublished composer development, build its wheel in its own checkout, install
+that wheel explicitly into the test environment, and use `uv run --no-sync` there
+while the change is unpublished; the tracked dependency above always names a published
+immutable revision. Never commit a dependency path that reaches into one private
+deployment's parent or sibling directories.
+
+Helheim requires `procedure-composer==0.2.0` for single-file documents. The Git
+source in `pyproject.toml` and the resolved entry in `uv.lock` pin the exact
+composer revision; the branch open in the editor does not change that dependency.
 
 ## Licence
 
-Apache-2.0. See `LICENSE`.
+Apache-2.0. See [LICENSE](LICENSE).

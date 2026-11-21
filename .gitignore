@@ -9,3 +9,4 @@ build/
 .env
 tokens.json
 *.db
+.qa-state/

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from helheim.app import create_app
@@ -48,7 +51,7 @@ def test_annotations_win_over_names() -> None:
 def test_a_call_renders_as_a_tree(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     app = create_app(load_settings())
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
 
     payload = {
         "shared": {"reasoning": [{"title": "one"}, {"title": "two"}]},
@@ -79,7 +82,7 @@ def test_a_call_renders_as_a_tree(tmp_path: Path, monkeypatch) -> None:
 def test_a_long_value_is_expandable_in_place(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     app = create_app(load_settings())
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
 
     long_text = "the whole body of the record " * 12  # 360 characters
     call_id = app.state.store.insert(
@@ -138,7 +141,7 @@ def test_a_form_takes_its_values_from_the_query(tmp_path: Path, monkeypatch) -> 
         ]
 
     monkeypatch.setattr("helheim.app.mcp_client.list_tools", fake_tools)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
     response = client.get("/s/munnin/t/awaken?domain=software-architect")
     assert response.status_code == 200
     assert 'value="software-architect"' in response.text
@@ -188,6 +191,7 @@ def test_a_form_names_its_own_post_target(tmp_path: Path, monkeypatch) -> None:
     async def fake_call(server, token, name, arguments):
         from helheim.mcp_client import CallOutcome
 
+        assert arguments == {"domain": "software-architect"}
         return CallOutcome(payload={}, envelope={}, text="ok", is_error=False, duration_ms=3)
 
     monkeypatch.setattr("helheim.app.mcp_client.list_tools", fake_tools)
@@ -204,20 +208,24 @@ def test_a_form_names_its_own_post_target(tmp_path: Path, monkeypatch) -> None:
             duration_ms=5,
         )
     )
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
 
     page = client.get(f"/calls/{call_id}/replay")
     assert page.status_code == 200
     assert 'action="/s/munnin/t/awaken"' in page.text
 
-    sent = client.post("/s/munnin/t/awaken", data={"domain": "software-architect"}, follow_redirects=False)
+    csrf = re.search(r'name="(__helheim_csrf_*)" value="([^"]+)"', page.text)
+    sent = client.post(
+        "/s/munnin/t/awaken", data={"domain": "software-architect", csrf.group(1): csrf.group(2)},
+        headers={"Origin": "http://127.0.0.1:8765"}, follow_redirects=False,
+    )
     assert sent.status_code == 303
 
 
 def test_history_lists_calls(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     app = create_app(load_settings())
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
     app.state.store.insert(
         CallRecord(
             server="munnin",
@@ -237,7 +245,7 @@ def test_history_lists_calls(tmp_path: Path, monkeypatch) -> None:
 
 def test_a_server_without_a_token_says_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
-    client = TestClient(create_app(load_settings()))
+    client = TestClient(create_app(load_settings()), base_url="http://127.0.0.1:8765")
     response = client.get("/s/munnin")
     assert response.status_code == 200
     assert "missing" in response.text
@@ -246,7 +254,7 @@ def test_a_server_without_a_token_says_missing(tmp_path: Path, monkeypatch) -> N
 
 def test_a_tool_form_without_a_token_explains_itself(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
-    client = TestClient(create_app(load_settings()))
+    client = TestClient(create_app(load_settings()), base_url="http://127.0.0.1:8765")
     response = client.get("/s/munnin/t/awaken")
     assert response.status_code == 409
     assert "not usable yet" in response.text
@@ -254,7 +262,7 @@ def test_a_tool_form_without_a_token_explains_itself(tmp_path: Path, monkeypatch
 
 def test_an_unknown_server_is_a_404(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
-    client = TestClient(create_app(load_settings()))
+    client = TestClient(create_app(load_settings()), base_url="http://127.0.0.1:8765")
     assert client.get("/s/nowhere").status_code == 404
     assert client.get("/calls/999").status_code == 404
 
@@ -267,7 +275,7 @@ def test_a_response_over_the_render_limit_is_not_expanded(
     monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
     monkeypatch.setattr(app_module, "RENDER_LIMIT_BYTES", 10)
     app = app_module.create_app(load_settings())
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
     call_id = app.state.store.insert(
         CallRecord(
             server="munnin",
@@ -283,3 +291,41 @@ def test_a_response_over_the_render_limit_is_not_expanded(
     assert response.status_code == 200
     assert "larger than the render limit" in response.text
     assert "<details" in response.text  # the raw envelope is still reachable
+
+
+@pytest.mark.parametrize("checked", [False, True])
+def test_csrf_field_never_shadows_or_leaks_into_actual_tool_parameters(
+    tmp_path, monkeypatch, checked,
+):
+    from helheim.mcp_client import CallOutcome, ToolInfo
+
+    monkeypatch.setenv("HELHEIM_HOME", str(tmp_path))
+    app = create_app(load_settings())
+    app.state.auth = SimpleNamespace(token=lambda server: "fixture")
+    received = []
+
+    async def tools(server, token):
+        return [ToolInfo("collision", "Test generic parameter names", {"properties": {
+            "_csrf": {"type": "string"}, "__helheim_csrf": {"type": "boolean"},
+        }}, {})]
+
+    async def call(server, token, name, arguments):
+        received.append(arguments)
+        return CallOutcome({}, {}, "ok", False, 0)
+
+    monkeypatch.setattr("helheim.app.mcp_client.list_tools", tools)
+    monkeypatch.setattr("helheim.app.mcp_client.call_tool", call)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        page = client.get("/s/munnin/t/collision")
+        hidden = re.search(r'type="hidden" name="([^"]+)" value="([^"]+)"', page.text)
+        assert hidden.group(1) not in ("_csrf", "__helheim_csrf")
+        data = {"_csrf": "intended tool value", hidden.group(1): hidden.group(2)}
+        if checked:
+            data["__helheim_csrf"] = "on"
+        sent = client.post("/s/munnin/t/collision", data=data,
+                           headers={"Origin": "http://127.0.0.1:8765"})
+        assert sent.status_code == 200  # Redirect follows to the stored inspection.
+    expected = {"_csrf": "intended tool value"}
+    if checked:
+        expected["__helheim_csrf"] = True
+    assert received == [expected]
