@@ -1,0 +1,44 @@
+{% extends "_editor_shell.html" %}
+{% block title %}Procedures{% endblock %}
+{% block content %}
+  <h2>Procedure workspaces</h2>
+  <p>Read composed instructions and edit the complete document that owns them. Save creates
+    source commits and a draft pull request, never a merge or deployment.</p>
+  {% if repositories %}
+    <form data-new-workspace class="form">
+      <label for="repository">Configured source repository</label>
+      <select id="repository" name="repository">
+        {% for repository in repositories %}
+          <option value="{{ repository.key }}">{{ repository.owner }}/{{ repository.name }}
+            · {{ repository.base_ref }}</option>
+        {% endfor %}
+      </select>
+      <button class="button" type="submit">Open new workspace</button>
+      <p data-status role="status" aria-live="polite"></p>
+    </form>
+  {% else %}
+    <p class="notice">No source repository is configured. Add a
+      <code>[procedure_repositories.&lt;key&gt;]</code> entry with owner, name, base_ref
+      and catalog_root to Helheim's config.toml. Sign in separately with <code>gh auth login</code>.
+      Memory invitations do not grant GitHub access.</p>
+  {% endif %}
+  <div class="servers">
+    {% for workspace in workspaces %}
+      <article class="server" data-workspace="{{ workspace.id }}">
+        <a href="/procedures/{{ workspace.id }}"><strong>{{ workspace.repository.owner }}/{{ workspace.repository.name }}</strong></a>
+        <p><code>{{ workspace.branch }}</code></p>
+        <p class="subtle">Last observed commit: {{ workspace.head_oid }}</p>
+        {% if workspace.pending_action %}
+          <button class="button" data-workspace-action="reconcile">Reconcile unfinished save</button>
+        {% endif %}
+        {% if workspace.pending_pr and not workspace.pending_action %}
+          <p class="notice">Source is saved to the branch; the PR is not yet confirmed.</p>
+          <button class="button" data-workspace-action="retry-pr">Retry PR only</button>
+        {% endif %}
+        <a data-pr-link {% if workspace.pull_url|github_url %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %}
+          target="_blank" rel="noopener noreferrer">Open draft PR</a>
+        <p data-status role="status" aria-live="polite"></p>
+      </article>
+    {% endfor %}
+  </div>
+{% endblock %}

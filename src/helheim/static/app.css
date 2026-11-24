@@ -136,6 +136,36 @@ input[type="text"], input[type="number"], select, textarea {
 
 textarea { font-family: var(--mono); font-size: 12px; }
 
+.editor-shell { max-width: 1400px; }
+.editor-selectors, .editor-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+.editor-selectors label { flex: 1; min-width: 160px; }
+.editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.editor-columns > section { min-width: 0; }
+.editor-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.6 var(--mono);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  max-height: 65vh;
+  overflow: auto;
+}
+.source-section, .source-editor { margin: 24px 0; }
+.source-provenance { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.button:disabled { opacity: 0.45; cursor: not-allowed; }
+[hidden] { display: none !important; }
+@media (max-width: 850px) {
+  .editor-columns { grid-template-columns: 1fr; }
+}
+
 .metrics {
   display: flex;
   align-items: baseline;

@@ -30,6 +30,7 @@
     {% endif %}
 
     <form method="post" action="/s/{{ server.name }}/t/{{ tool.name }}" class="form" data-pending>
+      <input type="hidden" name="{{ csrf_field_name(fields) }}" value="{{ request.state.csrf }}">
       {% for field in fields %}
         <div class="field">
           <label for="f-{{ field.name }}">

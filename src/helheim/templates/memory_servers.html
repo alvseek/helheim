@@ -1,0 +1,13 @@
+{% extends "_editor_shell.html" %}
+{% block title %}Memory{% endblock %}
+{% block content %}
+  <h2>Memory</h2>
+  <p>Choose a configured memory server. Editing requires advertised revision and tenant guards;
+    an older server stays read-only. Connect through the inspector first.</p>
+  <div class="servers">
+    {% for server in servers %}
+      <article class="server"><a href="/memory/{{ server.name|urlencode }}">{{ server.name }}</a>
+        <p class="subtle">{{ server.url }}</p></article>
+    {% endfor %}
+  </div>
+{% endblock %}

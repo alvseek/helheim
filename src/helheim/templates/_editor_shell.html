@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ request.state.csrf }}">
+  <title>{% block title %}Editors{% endblock %} · Helheim</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/editors.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <h1><a href="/">Helheim</a></h1>
+    <nav><a href="/">Inspector</a> · <a href="/procedures">Procedures</a> ·
+      <a href="/memory">Memory</a> · <a href="/history">History</a></nav>
+  </header>
+  <main class="editor-shell">{% block content %}{% endblock %}</main>
+</body>
+</html>
