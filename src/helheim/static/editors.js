@@ -276,10 +276,9 @@
         const list = Array.isArray(dependents) ? dependents : [];
         const line = document.querySelector("[data-preview-impact]");
         if (line) {
-          line.textContent = "Full-file impact: saving this document changes " +
+          line.textContent = "Procedures using this source file: " +
             list.length + " delivered procedure(s)" +
-            (list.length ? ": " + list.join(", ") : ".") +
-            " Other regions of the same file travel with it.";
+            (list.length ? ": " + list.join(", ") : ".");
         }
       }
 
@@ -291,7 +290,7 @@
           try {
             const result = await post("/procedures/" + encodeURIComponent(state.id) + "/" + action, {
               procedure: state.procedure, backend: state.backend,
-              document: state.document_id, draft: submitted,
+              document: state.document_id, region: state.region, draft: submitted,
               expected_head: state.head, expected_document_hash: state.document_hash,
             });
             if (action === "preview") {
@@ -423,8 +422,6 @@
     selectors.addEventListener("submit", (event) => {
       event.preventDefault();
       const query = new URLSearchParams(new FormData(selectors));
-      const documentPath = selectors.elements.namedItem("document").selectedOptions[0]?.dataset.path;
-      if (documentPath) query.set("document_path", documentPath);
       // The controls must describe the displayed source until another page loads,
       // including when a user cancels or returns via browser history.
       selectors.reset();

@@ -156,11 +156,12 @@ def test_hosted_subprocess_saves_one_file_to_branch_and_open_draft_pr(
                               headers=headers)
         assert created.status_code == 200
         path = created.json()["redirect"]
-        state = initial(client.get(path + "?document=db"))
-        draft = FILES[STORE].decode().replace("DB read", "Synthetic hosted edit")
+        state = initial(client.get(path + "?document=db&region=flow.read"))
+        draft = "Synthetic hosted edit"
         saved = client.post(path + "/save", headers=headers, json={
             "procedure": state["procedure"], "backend": state["backend"],
             "document": state["document_id"], "draft": draft,
+            "region": state["region"],
             "expected_head": state["head"], "expected_document_hash": state["document_hash"],
         })
         assert saved.status_code == 200 and saved.json()["status"] == "saved"
@@ -175,7 +176,9 @@ def test_hosted_subprocess_saves_one_file_to_branch_and_open_draft_pr(
         branch = pull["head"]["ref"]
         commit = remote["commits"][remote["branches"][branch]]
         tree = remote["trees"][commit["tree"]]
-        assert base64.b64decode(remote["blobs"][tree[STORE]]) == draft.encode()
+        assert base64.b64decode(remote["blobs"][tree[STORE]]) == FILES[STORE].replace(
+            b"DB read", draft.encode()
+        )
         commit_call = next(call for call in git.calls() if call["endpoint"] == "graphql")
         assert commit_call["repository"].lower() == (
             f"{repository.owner}/{repository.name}".lower()
@@ -193,10 +196,11 @@ def test_hosted_stale_head_and_non_draft_pr_refuse_writes(git):
         created = client.post("/procedures/workspaces", json={"repository": "core"},
                               headers=headers)
         path = created.json()["redirect"]
-        view = initial(client.get(path + "?document=db"))
-        draft = FILES[STORE].decode().replace("DB read", "Guarded hosted edit")
+        view = initial(client.get(path + "?document=db&region=flow.read"))
+        draft = "Guarded hosted edit"
         payload = {"procedure": view["procedure"], "backend": view["backend"],
                    "document": view["document_id"], "draft": draft,
+                   "region": view["region"],
                    "expected_head": "f" * 40, "expected_document_hash": view["document_hash"]}
         assert client.post(path + "/save", headers=headers, json=payload).status_code == 409
         assert git.counters()["branch"] == git.counters()["commit"] == 0

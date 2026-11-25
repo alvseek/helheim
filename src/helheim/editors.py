@@ -35,6 +35,7 @@ class SourceDraft(EditorInput):
     procedure: str
     backend: Literal["markdown", "db"]
     document: str
+    region: str | None = None
     draft: str
     expected_head: str
     expected_document_hash: str
@@ -126,27 +127,30 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         identity: str, request: Request, procedure: str | None = None,
         backend: Literal["markdown", "db"] = "db",
         revision: Literal["branch", "base"] = "branch",
-        document: str | None = None, span: str | None = None, document_path: str | None = None,
+        document: str | None = None, region: str | None = None, document_path: str | None = None,
+        composed: bool = False,
     ):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, procedure, backend, document or None,
             revision=revision, allow_missing_document=True, expected_document_path=document_path,
+            region=region,
         )
         original = view["original"]
+        backend = view["backend"]
         init = None
-        if original and revision == "branch":
+        if original and revision == "branch" and (original.kind != "backend" or region):
             init = {
                 "kind": "source", "id": identity, "procedure": view["procedure"],
                 "backend": backend, "document_id": original.id,
                 "document_kind": original.kind, "document_path": original.path,
-                "span": span,
+                "region": region,
                 "head": view["head"], "document_hash": original.sha256,
                 "original": view["original_text"],
                 "pending": bool(view["workspace"]["pending_action"]
                                 or view["workspace"]["pending_pr"]),
             }
         return templates.TemplateResponse(request, "procedure.html", {
-            **view, "backend": backend, "span": span,
+            **view, "region": region, "composed": not original or (region and composed),
             "document_unavailable": bool(document) and original is None,
             "composer_version": composer_version, "init": init,
         })
@@ -155,7 +159,7 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     async def preview_source(identity: str, body: SourceDraft):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, body.procedure, body.backend,
-            body.document, body.draft,
+            body.document, body.draft, region=body.region,
         )
         original = view["original"]
         if (view["head"] != body.expected_head
@@ -178,7 +182,7 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     async def save_source(identity: str, body: SourceDraft):
         return await run_in_threadpool(
             app.state.workspaces.save, identity, body.procedure, body.backend, body.document,
-            body.draft, body.expected_head, body.expected_document_hash,
+            body.draft, body.expected_head, body.expected_document_hash, body.region,
         )
 
     @app.post("/procedures/{identity}/retry-pr")

@@ -167,7 +167,7 @@ function editor(kind, original) {
     ? { kind, id: "workspace", original, head: "head-0", document_hash: "hash-0",
       procedure: "wrap-up", backend: "db", document_id: "db",
       document_kind: "backend", document_path: "procedures/memory/storage-backends/db.md",
-      span: "wrap-up.report" }
+      region: "wrap-up.report" }
     : { kind, id: "memory", body: original,
       context: { uuid: "uuid", tenant: "tenant", revision: "revision-0" } };
   const root = new Element({ editorInit: JSON.stringify(state) });
@@ -316,6 +316,7 @@ for (const kind of ["source", "memory"]) {
         assert.match(app.requests.at(-1).body.expected_head, /^head-/);
         assert.match(app.requests.at(-1).body.expected_document_hash, /^hash-/);
         assert.equal(app.requests.at(-1).body.document, "db");
+        assert.equal(app.requests.at(-1).body.region, "wrap-up.report");
       } else assert.match(app.requests.at(-1).body.expected_revision, /^revision-/);
     });
   }
@@ -347,7 +348,6 @@ for (const [name, value] of [
     const url = new URL(app.navigations[0], "http://localhost");
     assert.equal(url.pathname, "/procedures/workspace");
     const expected = { ...app.currentView, [name]: value };
-    if (expected.document) expected.document_path = app.documentPaths[expected.document];
     assert.deepEqual(Object.fromEntries(url.searchParams), expected);
     assert.deepEqual(app.selectors.values, app.currentView);
     assert.equal(app.confirmations(), 0);

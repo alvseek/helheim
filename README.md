@@ -9,7 +9,7 @@ connections and GitHub CLI login.
 | View | What it does | Where a save lands |
 |---|---|---|
 | Inspector | Lists actual tool schemas, sends calls, renders results and keeps replayable history | The called tool's destination; the inspection is stored locally |
-| Procedures | Reads composed instructions with source provenance; opens and saves the complete owning Markdown document | One editing branch and draft GitHub PR, never a merge or deployment |
+| Procedures | Shows composed instructions or their source documents. Select a backend document to see the sections used by this procedure, or edit a backend section directly where it appears. | One editing branch and draft GitHub PR, never a merge or deployment |
 | Memory | Browses metadata, verifies a complete body, edits body and metadata independently | Authenticated Munnin operations in the displayed acting account |
 
 GitHub repository rights and memory invitations are independent. Helheim never
@@ -127,15 +127,16 @@ submodule is not a writable source directory: configure its owning repository in
 Missing, truncated or unsupported catalogs are refused, including the superseded
 fragmented `procedures/assemblies`/`procedures/sections` layout.
 
-Open a workspace, choose a procedure, backend and revision, then open the document behind
-a composed span. Each procedure, component and consolidated storage-backend file is one
-complete Markdown document, and the editor shows that whole file rather than the clicked
-region. Base snapshots are read-only. The view identifies the source commit, composer
-version, document path, the clicked reference, and every delivered procedure the file
-affects. Shared-document warnings distinguish edits that change both backends.
+Open a workspace and choose a procedure, then its document. **Composed instructions**
+offers a DB/Markdown selector. Choose **Edit section** on a backend passage to edit it
+in place, or select the backend document to see only the regions used by this procedure.
+Procedure and component documents still open as whole Markdown files. The separate
+Revision selector switches between the workspace branch and its read-only base.
 
 Preview replaces the complete document in an in-memory snapshot and renders both backends
-for the selected procedure; the diff is over the whole file. Save commits that complete
+for the selected procedure; the diff covers the section or document being edited.
+For a section edit the server replaces just its source text, keeping other regions and
+their markers intact. Save commits that complete
 blob only, with an atomic expected-HEAD and full-file-hash precondition, then creates or
 reuses the workspace's draft PR. Semantic errors may remain in a saved draft, visibly
 failing validation, while structural errors, changed document identity/kind, unknown
