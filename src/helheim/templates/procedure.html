@@ -9,7 +9,8 @@
   </div>
   <p><code>{{ workspace.repository.owner }}/{{ workspace.repository.name }}</code> ·
     <code>{{ workspace.branch }}</code></p>
-  <form method="get" class="editor-selectors">
+  <form method="get" action="/procedures/{{ workspace.id }}" class="editor-selectors"
+        data-procedure-selectors autocomplete="off">
     <label>Procedure
       <select name="procedure">
         {% for name in catalog.procedures %}
@@ -25,9 +26,9 @@
     </label>
     <label>Document
       <select name="document">
-        <option value="">Composed instructions only</option>
+        <option value="" {% if not original %}selected{% endif %}>Composed instructions only</option>
         {% for row in documents[backend] %}
-          <option value="{{ row.id }}" {% if original and row.id == original.id %}selected{% endif %}>{{ row.kind }} · {{ row.id }}</option>
+          <option value="{{ row.id }}" data-path="{{ row.path }}" {% if original and row.id == original.id %}selected{% endif %}>{{ row.kind }} · {{ row.id }}</option>
         {% endfor %}
       </select>
     </label>
@@ -37,8 +38,9 @@
         <option value="base" {% if revision == "base" %}selected{% endif %}>Base snapshot (read-only)</option>
       </select>
     </label>
-    <button class="button" type="submit">View</button>
+    <noscript><button class="button" type="submit">View</button></noscript>
   </form>
+  <p data-view-loading role="status" aria-live="polite"></p>
   {% if document_unavailable %}
     <p class="notice">The selected document is not available in this view. Showing composed
       instructions only.</p>
@@ -75,7 +77,7 @@
           <a data-pr-link {% if workspace.pull_url|github_url %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %} target="_blank" rel="noopener noreferrer">Open draft PR</a>
           <p data-status role="status" aria-live="polite"></p>
         </div>
-        <p><a href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ original.id|urlencode }}" target="_blank" rel="noopener noreferrer">Open the latest document in a new tab; keep this draft here</a></p>
+        <p><a href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ original.id|urlencode }}&amp;document_path={{ original.path|urlencode }}" target="_blank" rel="noopener noreferrer">Open the latest document in a new tab; keep this draft here</a></p>
         <section data-source-preview hidden>
           <h4>Whole-document changes</h4><pre class="editor-preview" data-source-diff></pre>
           <p class="subtle" data-preview-impact></p>
@@ -87,21 +89,20 @@
         <pre class="editor-preview">{{ original_text }}</pre>
       {% endif %}
     </section>
+  {% else %}
+    <h3>Composed instructions · {{ backend }}</h3>
+    {% for piece in rendered[backend].spans %}
+      <section class="source-section">
+        <div class="source-provenance">
+          <code>{{ piece.id or piece.kind }}</code> · <code>{{ piece.path }}</code>
+          {% if piece.backend_applicability|length == 2 %}<span class="badge">Shared</span>{% endif %}
+          {% if piece.target %}<span class="subtle">region {{ piece.target }}</span>{% endif %}
+          {% if revision == "branch" %}
+            <a class="button" href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ piece.document_id|urlencode }}&amp;document_path={{ piece.path|urlencode }}{% if piece.id %}&amp;span={{ piece.id|urlencode }}{% endif %}">Edit document</a>
+          {% endif %}
+        </div>
+        <pre class="editor-preview">{{ piece.text }}</pre>
+      </section>
+    {% endfor %}
   {% endif %}
-  <h3 data-composed-label>Composed instructions · {{ backend }}</h3>
-  <div data-source-composed>
-  {% for piece in rendered[backend].spans %}
-    <section class="source-section">
-      <div class="source-provenance">
-        <code>{{ piece.id or piece.kind }}</code> · <code>{{ piece.path }}</code>
-        {% if piece.backend_applicability|length == 2 %}<span class="badge">Shared</span>{% endif %}
-        {% if piece.target %}<span class="subtle">region {{ piece.target }}</span>{% endif %}
-        {% if revision == "branch" %}
-          <a class="button" href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ piece.document_id|urlencode }}{% if piece.id %}&amp;span={{ piece.id|urlencode }}{% endif %}">Edit document</a>
-        {% endif %}
-      </div>
-      <pre class="editor-preview">{{ piece.text }}</pre>
-    </section>
-  {% endfor %}
-  </div>
 {% endblock %}

@@ -126,11 +126,11 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         identity: str, request: Request, procedure: str | None = None,
         backend: Literal["markdown", "db"] = "db",
         revision: Literal["branch", "base"] = "branch",
-        document: str | None = None, span: str | None = None,
+        document: str | None = None, span: str | None = None, document_path: str | None = None,
     ):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, procedure, backend, document or None,
-            revision=revision, allow_missing_document=True,
+            revision=revision, allow_missing_document=True, expected_document_path=document_path,
         )
         original = view["original"]
         init = None

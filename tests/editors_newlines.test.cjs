@@ -157,8 +157,10 @@ class Element {
   setAttribute() {}
   removeAttribute() {}
   append() {}
-  async fire(name) { if (this.listeners[name]) await this.listeners[name](); }
+  async fire(name, event) { if (this.listeners[name]) await this.listeners[name](event); }
 }
+
+function formEvent() { return { preventDefault() {} }; }
 
 function editor(kind, original) {
   const state = kind === "source"
@@ -194,6 +196,17 @@ function editor(kind, original) {
   const requests = [];
   const window = new Element();
   const navigations = [];
+  const selectors = new Element();
+  const currentView = { procedure: "wrap-up", backend: "db", document: "db", revision: "branch" };
+  const documentPaths = { db: "procedures/memory/storage-backends/db.md", another: "procedures/another.md" };
+  selectors.action = "/procedures/workspace";
+  selectors.reset = () => { selectors.values = { ...currentView }; };
+  selectors.reset();
+  selectors.requestSubmit = () => selectors.fire("submit", formEvent());
+  selectors.elements = { namedItem(name) {
+    assert.equal(name, "document");
+    return { selectedOptions: [{ dataset: { path: documentPaths[selectors.values.document] } }] };
+  } };
   let confirm = true;
   let confirmCount = 0;
   window.confirm = () => { confirmCount++; return confirm; };
@@ -207,6 +220,7 @@ function editor(kind, original) {
       if (selector === 'meta[name="csrf-token"]') return { content: "token" };
       if (selector === "[data-editor-init]") return root;
       if (selector === "[data-new-workspace]") return null;
+      if (selector === "[data-procedure-selectors]") return kind === "source" ? selectors : null;
       return root.querySelector(selector);
     },
     querySelectorAll() { return []; },
@@ -218,7 +232,8 @@ function editor(kind, original) {
     createElement() { return new Element(); },
   };
   vm.runInNewContext(script, {
-    document, window, URL,
+    document, window, URL, URLSearchParams,
+    FormData: function (form) { return Object.entries(form.values); },
     async fetch(url, options) {
       const body = JSON.parse(options.body);
       requests.push({ url, body });
@@ -232,7 +247,7 @@ function editor(kind, original) {
         ? { status: "saved", head: "head-" + revision,
           document: { id: "db", kind: "backend",
             path: "procedures/memory/storage-backends/db.md", sha256: "hash-" + revision },
-          workspace: {}, spans: { db: [] }, rendered: { db: body.draft, markdown: body.draft },
+           workspace: {}, rendered: { db: "DB: " + body.draft, markdown: "Markdown: " + body.draft },
           diff: "" }
         : { saved: body.action, edit_context: { uuid: "uuid", tenant: "tenant", revision: "revision-" + revision },
           metadata: body.action === "metadata" ? body.draft : { title: "before" }, preview: body.draft, diff: "" };
@@ -240,7 +255,7 @@ function editor(kind, original) {
     },
   }, { filename: scriptPath });
   return {
-    root, text, metadata, buttons, requests, navigations,
+    root, text, metadata, buttons, requests, navigations, selectors, currentView, documentPaths,
     confirm(value) { confirm = value; },
     confirmations() { return confirmCount; },
     async close() { await close.fire("click"); },
@@ -253,6 +268,11 @@ function editor(kind, original) {
     closeResult(value) { closeResult = value; },
     async click(area, action) { await buttons[area + "-" + action].fire("click"); },
     async edit(value) { text.value = value; await text.fire("input"); },
+    async select(name, value) {
+      selectors.values[name] = value;
+      await selectors.fire("change", { target: { matches: (tag) => tag === "select" } });
+    },
+    async returnToPage() { await window.fire("pageshow", { persisted: true }); },
     dirty() {
       let prevented = false;
       window.listeners.beforeunload({ preventDefault() { prevented = true; } });
@@ -291,6 +311,8 @@ for (const kind of ["source", "memory"]) {
       assert.equal(app.requests.at(-1).body.draft, expected.replace("β", "B"));
       assert.equal(app.dirty(), false);
       if (kind === "source") {
+        assert.equal(app.root.querySelector("[data-preview-db]").textContent, "DB: " + expected);
+        assert.equal(app.root.querySelector("[data-preview-markdown]").textContent, "Markdown: " + expected);
         assert.match(app.requests.at(-1).body.expected_head, /^head-/);
         assert.match(app.requests.at(-1).body.expected_document_hash, /^hash-/);
         assert.equal(app.requests.at(-1).body.document, "db");
@@ -313,6 +335,140 @@ for (const kind of ["source", "memory"]) {
     assert.equal(app.dirty(), false);
   });
 }
+
+for (const [name, value] of [
+  ["procedure", "other flow"], ["backend", "markdown"], ["document", ""], ["revision", "base"],
+  ["document", "another"],
+]) {
+  test("source selectors load automatically on " + name + " change", async () => {
+    const app = editor("source", "original");
+    await app.select(name, value);
+    assert.equal(app.navigations.length, 1);
+    const url = new URL(app.navigations[0], "http://localhost");
+    assert.equal(url.pathname, "/procedures/workspace");
+    const expected = { ...app.currentView, [name]: value };
+    if (expected.document) expected.document_path = app.documentPaths[expected.document];
+    assert.deepEqual(Object.fromEntries(url.searchParams), expected);
+    assert.deepEqual(app.selectors.values, app.currentView);
+    assert.equal(app.confirmations(), 0);
+    assert.equal(app.requests.length, 0);
+    await app.select("document", "another");
+    assert.equal(app.navigations.length, 1);
+    await app.returnToPage();
+    await app.select("document", "another");
+    assert.equal(app.navigations.length, 2);
+  });
+}
+
+test("source selector cancellation retains the draft and current view; confirmation prompts once", async () => {
+  const app = editor("source", "original");
+  await app.edit("edited");
+  app.confirm(false);
+  await app.select("backend", "markdown");
+  assert.deepEqual(app.selectors.values, app.currentView);
+  assert.equal(app.confirmations(), 1);
+  assert.equal(app.navigations.length, 0);
+  assert.equal(app.text.value, "edited");
+  assert.equal(app.dirty(), true);
+  app.confirm(true);
+  await app.select("backend", "markdown");
+  assert.equal(app.confirmations(), 2);
+  assert.equal(app.navigations.length, 1);
+  assert.equal(app.dirty(), false); // Approved navigation doesn't prompt a second time.
+  assert.equal(app.dirty(), true); // Other departures remain protected.
+  assert.equal(app.text.value, "edited");
+  assert.equal(app.requests.length, 0);
+});
+
+function workspaceCreator(fetch) {
+  const form = new Element();
+  const button = form.querySelector('button[type="submit"]');
+  const repository = form.querySelector("select");
+  const status = form.querySelector("[data-status]");
+  button.textContent = "Open new workspace";
+  repository.value = "core";
+  const window = new Element();
+  const navigations = [];
+  window.location = { assign(url) { navigations.push(url); } };
+  const document = {
+    querySelector(selector) {
+      if (selector === 'meta[name="csrf-token"]') return { content: "token" };
+      if (selector === "[data-new-workspace]") return form;
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  vm.runInNewContext(script, { document, window, fetch }, { filename: scriptPath });
+  return { button, repository, status, navigations,
+    submit: () => form.fire("submit", formEvent()),
+    returnToPage: () => window.fire("pageshow", { persisted: true }) };
+}
+
+const workspaceRedirect = "/procedures/" + "a".repeat(32);
+
+test("workspace creation immediately shows progress and rejects duplicates through redirect", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let requests = 0;
+  const app = workspaceCreator(async (url, options) => {
+    requests++;
+    assert.equal(url, "/procedures/workspaces");
+    assert.deepEqual(JSON.parse(options.body), { repository: "core" });
+    await gate;
+    return { ok: true, json: async () => ({ redirect: workspaceRedirect }) };
+  });
+  const opening = app.submit();
+  assert.equal(app.button.textContent, "Opening workspace…");
+  assert.equal(app.button.disabled, true);
+  assert.equal(app.repository.disabled, true);
+  await app.submit();
+  assert.equal(requests, 1);
+  release();
+  await opening;
+  assert.deepEqual(app.navigations, [workspaceRedirect]);
+  assert.equal(app.button.textContent, "Opening workspace…");
+  assert.equal(app.button.disabled, true);
+  await app.submit();
+  assert.equal(requests, 1);
+  await app.returnToPage();
+  assert.equal(app.button.textContent, "Open new workspace");
+  assert.equal(app.button.disabled, false);
+  assert.equal(app.repository.disabled, false);
+  assert.equal(app.status.textContent, "");
+  await app.submit();
+  assert.equal(requests, 2);
+});
+
+test("workspace creation restores controls on error and on an unconfirmed response", async () => {
+  const replies = [
+    { ok: false, json: async () => ({ error: "Workspace unavailable" }) },
+    { ok: true, json: async () => ({}) },
+    { ok: true, json: async () => ({ redirect: workspaceRedirect }) },
+  ];
+  const app = workspaceCreator(async () => replies.shift());
+  for (const message of ["Workspace unavailable", "Workspace creation could not be confirmed"]) {
+    await app.submit();
+    assert.match(app.status.textContent, new RegExp(message));
+    assert.equal(app.button.textContent, "Open new workspace");
+    assert.equal(app.button.disabled, false);
+    assert.equal(app.repository.disabled, false);
+    assert.deepEqual(app.navigations, []);
+  }
+  await app.submit();
+  assert.deepEqual(app.navigations, [workspaceRedirect]);
+});
+
+test("workspace creation doesn't redirect on a late response after returning via history", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const app = workspaceCreator(async () => gate);
+  const abandoned = app.submit();
+  await app.returnToPage();
+  release({ ok: true, json: async () => ({ redirect: workspaceRedirect }) });
+  await abandoned;
+  assert.equal(app.button.disabled, false);
+  assert.deepEqual(app.navigations, []);
+});
 
 test("memory: metadata saves preserve dirty body and its original separator baseline", async () => {
   const app = editor("memory", "a\r\nb\nc\r");

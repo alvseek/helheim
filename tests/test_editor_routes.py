@@ -5,7 +5,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 from test_memory_editor import Server as FakeMemory
-from test_workspaces import BASE, FILES, FakeGitHub
+from test_workspaces import BASE, FILES, FLOW_BODY, FLOW_PATH, STORE_PATH, FakeGitHub, document
 
 from helheim.app import create_app
 from helheim.config import Server, Settings
@@ -72,6 +72,11 @@ def test_source_view_preview_and_save_are_distinct(rig):
     composed = client.get(path)
     assert composed.status_code == 200
     assert "Owning document" not in composed.text
+    assert "Composed instructions · db" in composed.text
+    assert f'<form method="get" action="{path}"' in composed.text
+    assert "data-procedure-selectors" in composed.text
+    for text in ("Read, then write.", "Shared rules.", "DB read", "DB write", "Edit document"):
+        assert text in composed.text
     assert github.calls == []
 
     page = client.get(path + "?document=db")
@@ -79,9 +84,16 @@ def test_source_view_preview_and_save_are_distinct(rig):
     assert "Owning document" in page.text and "Save document to draft PR" in page.text
     assert "delivered to db only" in page.text
     assert textarea(page).encode("utf-8") == STORE_PATH_BYTES
-    assert "Edit document" in page.text
+    for text in ("Composed instructions ·", "Read, then write.", "Shared rules.", "Edit document"):
+        assert text not in page.text
     assert "Preview, not deployed content" in page.text
     assert github.calls == []
+
+    base = client.get(path, params={"document": "db", "revision": "base"})
+    assert base.status_code == 200 and "The base snapshot is read-only" in base.text
+    assert "DB read" in base.text and "DB write" in base.text
+    assert "Composed instructions ·" not in base.text
+    assert "Read, then write." not in base.text and "source-draft" not in base.text
 
     shared = client.get(path + "?document=flow")
     assert "Shared document: saving changes both" in shared.text
@@ -98,6 +110,8 @@ def test_source_view_preview_and_save_are_distinct(rig):
                           json=source_request(state, revision_draft), headers=headers)
     assert preview.status_code == 200
     assert "Unsaved § missing-op\n" in preview.json()["rendered"]["db"]
+    assert "Read, then write." in preview.json()["rendered"]["db"]
+    assert "MD read" in preview.json()["rendered"]["markdown"]
     assert preview.json()["validation_errors"]["db"] == ["missing-op"]
     assert preview.json()["dependents"] == ["flow"]
     assert preview.json()["applicability"] == ["db"]
@@ -147,6 +161,31 @@ def test_view_falls_back_to_composed_instructions(rig, document, notice):
     body.update(backend="markdown", document=document)
     for action in ("preview", "save"):
         assert client.post(f"{path}/{action}", json=body, headers=headers).status_code == 400
+    assert github.calls == []
+
+
+def test_view_does_not_switch_to_a_different_source_with_the_same_id(rig):
+    _, client, headers, github, _ = rig
+    component_path = "procedures/components/db.md"
+    github.commits[BASE][component_path] = document("db", "component", "Markdown-only rules.\n")
+    github.commits[BASE][FLOW_PATH] = document("flow", "procedure", FLOW_BODY + (
+        f'@start component id="flow.md-rules" ref="{component_path}" applies_to="markdown"\n'
+        "@end component\n"
+    ))
+    path = workspace(client, headers)
+    db_view = client.get(path, params={"backend": "db", "document": "db"})
+    assert initial(db_view)["document_path"] == STORE_PATH
+    assert f'value="db" data-path="{STORE_PATH}"' in db_view.text
+    md_view = client.get(path, params={"backend": "markdown", "document": "db"})
+    assert initial(md_view)["document_path"] == component_path
+
+    switched = client.get(path, params={
+        "backend": "markdown", "document": "db", "document_path": STORE_PATH,
+    })
+    assert switched.status_code == 200
+    assert "selected document is not available" in switched.text
+    assert "Composed instructions · markdown" in switched.text
+    assert "Owning document" not in switched.text
     assert github.calls == []
 
 
