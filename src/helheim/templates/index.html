@@ -15,6 +15,12 @@
   </header>
 
   <main>
+    {% if settings.mode == "hosted" %}
+      <form method="post" action="/logout">
+        <input type="hidden" name="__helheim_csrf" value="{{ request.state.csrf }}">
+        <button type="submit">Sign out</button>
+      </form>
+    {% endif %}
     {% if not client_configured %}
       <p class="notice">
         No client is configured. Create a Native application in the tenant and set

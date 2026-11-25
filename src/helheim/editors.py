@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from . import mcp_client
 from .auth import AuthError
 from .config import Settings
-from .github import GitConflict, GitError, GitUncertain
+from .github import GitConflict, GitError, GitHub, GitUncertain
 from .memory_editor import MemoryEditError, MemoryEditor
 from .workspaces import Workspaces, WorkspaceStore
 
@@ -67,8 +67,13 @@ def github_url(value):
 
 
 def register_editors(app: FastAPI, settings: Settings, templates):
+    if settings.mode == "hosted":
+        def adapter(repository):
+            return GitHub(repository, credential_source=lambda: settings.hosted_github_token)
+    else:
+        adapter = GitHub
     app.state.workspaces = Workspaces(WorkspaceStore(settings.db_path),
-                                      settings.procedure_repositories)
+                                      settings.procedure_repositories, adapter=adapter)
 
     def server(name):
         found = settings.server(name)

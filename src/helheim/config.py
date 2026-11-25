@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .github import Repository
 
@@ -44,6 +45,36 @@ class Settings:
     max_store_bytes: int = DEFAULT_MAX_STORE_BYTES
     servers: tuple[Server, ...] = ()
     procedure_repositories: tuple[Repository, ...] = ()
+    mode: str = "desktop"
+    hosted_origin: str = ""
+    hosted_issuer: str = ""
+    hosted_client_id: str = ""
+    hosted_client_secret: str = field(default="", repr=False)
+    hosted_owner_sub: str = ""
+    hosted_github_token: str = field(default="", repr=False)
+
+    def __post_init__(self):
+        if self.mode not in ("desktop", "hosted"):
+            raise ValueError("invalid Helheim mode")
+        if self.mode == "hosted":
+            if not all((self.hosted_origin, self.hosted_issuer, self.hosted_client_id,
+                        self.hosted_client_secret, self.hosted_owner_sub)):
+                raise ValueError("hosted mode requires origin, issuer, client and owner")
+            origin = urlsplit(self.hosted_origin)
+            issuer = urlsplit(self.hosted_issuer)
+            try:
+                _ = origin.port, issuer.port
+            except ValueError as exc:
+                raise ValueError("invalid hosted URL port") from exc
+            if (origin.scheme != "https" or not origin.hostname or origin.username
+                    or origin.password or origin.path or origin.query or origin.fragment):
+                raise ValueError("hosted origin must be a canonical HTTPS origin")
+            if (issuer.scheme != "https" or not issuer.hostname
+                    or issuer.username or issuer.password or issuer.query or issuer.fragment
+                    or issuer.path.endswith("/")):
+                raise ValueError("issuer must use HTTPS")
+            if len(self.procedure_repositories) > 1:
+                raise ValueError("hosted procedure editing permits only one configured repository")
 
     @property
     def tokens_path(self) -> Path:
@@ -112,4 +143,11 @@ def load_settings(path: Path | None = None) -> Settings:
             )
             for key, row in raw.get("procedure_repositories", {}).items()
         ),
+        mode=os.environ.get("HELHEIM_MODE", app.get("mode", "desktop")),
+        hosted_origin=os.environ.get("HELHEIM_HOSTED_ORIGIN", ""),
+        hosted_issuer=os.environ.get("HELHEIM_HOSTED_ISSUER", ""),
+        hosted_client_id=os.environ.get("HELHEIM_HOSTED_CLIENT_ID", ""),
+        hosted_client_secret=os.environ.get("HELHEIM_HOSTED_CLIENT_SECRET", ""),
+        hosted_owner_sub=os.environ.get("HELHEIM_HOSTED_OWNER_SUB", ""),
+        hosted_github_token=os.environ.get("HELHEIM_HOSTED_GITHUB_TOKEN", ""),
     )

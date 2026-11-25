@@ -68,9 +68,8 @@ Do not point it at user state. `stop` is safe to repeat.
 ## Config Switching
 
 No normal app file is edited. The worker overrides `HELHEIM_HOME` before importing
-the app (which constructs a default instance at import time), then serves an
-explicit QA-only factory instance. Even import-time default server URLs are
-redirected to loopback placeholders in owned configuration.
+the app, then serves an explicit QA-only factory instance. Its configuration
+redirects default server URLs to loopback placeholders.
 
 Default state is ignored `./.qa-state`. A custom `--state` is allowed only under
 the host temp `opencode/helheim-qa-*` namespace. Ownership markers must match the
@@ -85,6 +84,16 @@ expected. An unrelated invalid user-config sentinel was not loaded or modified.
 An initial failure exposed import-time default config loading; the worker now
 redirects that import before creating the served instance.
 
+- The hosted-login and hosted MCP-consent boundary tests use a disposable,
+  hand-rolled HTTPS loopback OIDC issuer with test-local certificate trust,
+  two synthetic identities and signed tokens. Its real-Logto fidelity comparison
+  is **pending**: neither test proves real Logto behavior, public TLS ingress,
+  production registration or a real account's rejection. The MCP-consent test
+  doubles protected-resource discovery and MCP peers. Separately, the hosted
+  inspector and guarded-memory read use an owned loopback MCP peer and
+  pre-provisioned test state; they do not prove a real consent exchange, a real
+  deployed Munnin or native-browser behavior. GitHub and Kamal are outside
+  these tests. The issuer fixture is [hosted_oidc.py](fixtures/hosted_oidc.py).
 - The memory paged-read pair is built and passing over the peer's real loopback
   HTTP/MCP transport: exact source-order reconstruction, 17 corruption/interruption
   cases, a fresh-baseline recovery and a zero fixture write counter. It does not
@@ -94,6 +103,10 @@ redirects that import before creating the served instance.
   and commit responses, retained pending intent, reconciliation without
   recommit, partial PR failure and closed/ready/wrong-head/base refusal. It
   does not use a real GitHub remote or native-browser recovery.
+- The hosted GitHub credential path is exercised through the same subprocess
+  boundary using separate test credentials and synthetic repository selections.
+  Its shim is rung 3 and real-GitHub fidelity remains pending; token permissions, expiry and
+  the disposable-repository write proof are not established by this test.
 - A real `gh` disposable GitHub subset on 2026-11-19 completed M13's
   lost/unreadable branch and commit responses, partial PR-read recovery,
   ready/closed refusals and actual wrong-base metadata refusal on owned

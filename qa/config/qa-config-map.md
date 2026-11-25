@@ -1,6 +1,6 @@
 # QA Config Map — Helheim
 
-Last scan: 2026-11-19.
+Last scan: 2026-11-25.
 
 **Category status**: exists-documented  
 **Owner**: build-qa-bench
@@ -9,6 +9,7 @@ Last scan: 2026-11-19.
 |---|---|---|---|
 | QA-only inputs | [Inventory](REQUIRED.md) | exists-documented | Owned root and dynamic loopback port; no real credentials |
 | Runtime settings | [Config](../../src/helheim/config.py) | exists-documented | `HELHEIM_HOME`, local configuration and server/source settings |
+| Hosted settings | [Hosted mode](../../README.md#hosted-sign-in-development) | exists-documented | Explicit hosted inputs; not a production deployment recipe |
 | Configuration instructions | [README](../../README.md#connect-a-memory-server) | exists-documented | Real OAuth connections; never a QA default |
 | Dependency lock | [uv.lock](../../uv.lock) | exists-documented | Reproducible runtime/dev dependencies |
 

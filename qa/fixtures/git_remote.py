@@ -1,7 +1,7 @@
 # fixture: a synthetic GitHub remote behind the real gh subprocess boundary
 # produces: an owned gh executable plus retained branch/commit/PR state for the actual adapter
 # fidelity: rung 3 hand-rolled seed; no real gh, token, network or GitHub repository is touched
-# fidelity-checked: 2026-11-19, GitHub.request drove this process for every API call
+# fidelity-checked: PENDING — hosted credential behavior not compared with real GitHub
 # teardown: nonce-owned temp root is removed; no process or remote state remains
 from __future__ import annotations
 

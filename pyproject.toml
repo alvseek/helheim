@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.27",
     "mcp>=1.2",
     "tiktoken>=0.14,<0.15",
+    "authlib>=1.6,<2",
 ]
 
 [project.scripts]
@@ -25,6 +26,8 @@ procedure-composer = { git = "https://github.com/alvseek/agent-memory-system.git
 
 [dependency-groups]
 dev = [
+    "cryptography>=44,<51",
+    "pyjwt>=2.10,<3",
     "pytest>=8",
     "pytest-asyncio>=1",
     "ruff>=0.6",

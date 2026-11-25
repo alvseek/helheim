@@ -1,9 +1,9 @@
 # fixture: synthetic gh executable for the GitHub adapter's real subprocess boundary
 # produces: canned GitHub REST/GraphQL responses with retained state and injected response faults
 # fidelity: rung 3 hand-rolled seed; shapes mirror only what helheim.github.GitHub parses
-# fidelity-checked: 2026-11-19, exercised through GitHub.request (real subprocess, no network)
+# fidelity-checked: PENDING — hosted credential behavior not compared with real GitHub
 # teardown: caller removes the exact owned temp root; this process keeps no other state
-"""A tiny stand-in for ``gh api``. It never reads credentials or opens a socket."""
+"""A tiny stand-in for ``gh api``. It never opens a socket or records credentials."""
 
 from __future__ import annotations
 
@@ -107,10 +107,12 @@ def record_call(state, method, endpoint, payload):
         call.update({
             "path": additions[0].get("path") if additions else None,
             "branch": change.get("branch", {}).get("branchName"),
+            "repository": change.get("branch", {}).get("repositoryNameWithOwner"),
             "expected_head": change.get("expectedHeadOid"),
         })
     elif isinstance(payload, dict):
-        call.update({key: payload[key] for key in ("ref", "sha", "head", "base") if key in payload})
+        call.update({key: payload[key] for key in ("ref", "sha", "head", "base", "draft")
+                     if key in payload})
     state["calls"].append(call)
 
 
@@ -122,6 +124,31 @@ def main():
         return
     payload = json.loads(sys.stdin.read()) if wants_input else None
     record_call(state, method, endpoint, payload)
+    if state.get("hosted_probe"):
+        token = os.environ.get("GH_TOKEN", "")
+        config = Path(os.environ.get("GH_CONFIG_DIR", ""))
+        expected_fingerprint = state.get(
+            "credential_fingerprint", hashlib.sha256(b"fixture_only_credential").hexdigest()
+        )
+        state["calls"][-1]["credential_probe"] = {
+            "fixture_token": hashlib.sha256(token.encode()).hexdigest() == expected_fingerprint,
+            "alternate_credentials_absent": not any(os.environ.get(key) for key in (
+                "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                "HELHEIM_HOSTED_GITHUB_TOKEN", "HELHEIM_HOSTED_CLIENT_SECRET",
+                "GH_HOST", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
+            )),
+            "token_absent_from_argv": bool(token) and all(token not in arg for arg in sys.argv),
+            "token_absent_from_input": bool(token) and token not in json.dumps(payload),
+            "empty_config": config.is_dir() and not any(config.iterdir()),
+            "fixed_hostname": (
+                "--hostname" in sys.argv
+                and sys.argv[sys.argv.index("--hostname") + 1] == "github.com"
+            ),
+        }
+        if state["faults"].get("credential_refused"):
+            persist(state, path)
+            emit(401, {"message": "fixture credential refused"})
+            return
 
     prefix = f"repos/{state['owner']}/{state['repo']}/"
     parsed = urlsplit(endpoint)
@@ -213,7 +240,7 @@ def main():
         pull = {
             "number": number,
             "html_url": f"https://github.com/{state['owner']}/{state['repo']}/pull/{number}",
-            "state": "open", "draft": True,
+            "state": "open", "draft": payload.get("draft", False),
             "head": {"ref": payload["head"]}, "base": {"ref": payload["base"]},
         }
         state["pulls"][str(number)] = pull

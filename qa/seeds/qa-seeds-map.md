@@ -1,6 +1,6 @@
 # QA Seeds Map — Helheim
 
-Last scan: 2026-11-19.
+Last scan: 2026-11-25.
 
 **Category status**: exists-documented  
 **Owner**: build-qa-bench

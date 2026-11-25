@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from requests.exceptions import RequestException
+from starlette.concurrency import run_in_threadpool
 
 from . import mcp_client
 from .auth import Auth, AuthError
@@ -21,6 +22,8 @@ from .config import Server, Settings, load_settings
 from .editor_security import COOKIE, CSRF_FIELD_PREFIX, EditorSecurity, csrf_field_name
 from .editors import register_editors
 from .forms import arguments_from_form, fields_from_schema
+from .hosted_login import HostedLogin
+from .hosted_mcp_auth import HostedMCPAuth
 from .store import CallRecord, Store
 from .tokens import TokenCounter
 
@@ -32,12 +35,32 @@ PACKAGE_DIR = Path(__file__).parent
 RENDER_LIMIT_BYTES = 2 * 1024 * 1024
 
 
+class RejectHostedWebSockets:
+    """No WebSocket surface is currently supported in hosted mode."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        await self.app(scope, receive, send)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     security = EditorSecurity(settings)
-    app = FastAPI(title="Helheim", dependencies=[Depends(security.require_write)])
+    hosted = HostedLogin(settings) if settings.mode == "hosted" else None
+    app = FastAPI(
+        title="Helheim", dependencies=[Depends(security.require_write)],
+        docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
+        openapi_url=None if hosted else "/openapi.json",
+    )
+    if hosted:
+        app.add_middleware(RejectHostedWebSockets)
     app.state.settings = settings
-    app.state.auth = Auth(settings)
+    app.state.auth = HostedMCPAuth(settings, hosted) if hosted else Auth(settings)
     app.state.store = Store(settings.db_path, settings.max_store_bytes)
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
@@ -50,6 +73,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             security.prepare(request)
         except HTTPException as exc:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if hosted:
+            path = request.scope["path"]
+            public = ((request.method == "GET" and path in (
+                "/login", "/health", "/auth/login/complete"))
+                or (request.method == "POST" and path in (
+                    "/login/callback", "/auth/mcp/callback")))
+            if not public and not hosted.authorized(request):
+                if request.method in ("GET", "HEAD"):
+                    return RedirectResponse("/login", status_code=303)
+                return JSONResponse({"detail": "Sign in required"}, status_code=401)
         response = await call_next(request)
         cross_site = request.headers.get("sec-fetch-site") == "cross-site"
         confirmed_callback = request.url.path == "/callback" and response.status_code == 303
@@ -57,7 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 and (not cross_site or confirmed_callback)):
             response.set_cookie(
                 COOKIE, request.state.editor_owner, httponly=True, samesite="strict",
-                secure=request.url.scheme == "https",
+                secure=bool(hosted) or request.url.scheme == "https",
             )
         response.headers["X-Frame-Options"] = "DENY"
         # Native form POSTs can carry Origin: null under no-referrer, breaking
@@ -92,12 +125,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, object]:
+        if hosted:
+            return {"ok": True}
         return {
             "ok": True,
             "servers": len(settings.servers),
             "client_configured": bool(settings.client_id),
             "stored_bytes": app.state.store.total_bytes(),
         }
+
+    if hosted:
+        @app.get("/login")
+        async def login(request: Request):
+            return await hosted.begin(request)
+
+        @app.post("/login/callback")
+        async def login_callback(request: Request):
+            return await hosted.handoff.receive("login", request)
+
+        @app.get("/auth/login/complete")
+        async def login_complete(request: Request):
+            staged = hosted.handoff.consume("login", request)
+            if staged is None:
+                return JSONResponse({"detail": "Invalid login transaction"}, status_code=400)
+            return await hosted.callback(staged)
+
+        @app.post("/logout")
+        def logout(request: Request):
+            return hosted.logout(request)
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
@@ -111,15 +166,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "rows": rows,
                 "settings": settings,
-                "client_configured": bool(settings.client_id),
+                "client_configured": bool(
+                    settings.hosted_client_id if hosted else settings.client_id
+                ),
             },
         )
 
     @app.get("/auth/{name}/start")
-    def start(name: str, request: Request):
+    async def start(name: str, request: Request):
         server = need_server(name)
         try:
-            return RedirectResponse(app.state.auth.begin(server))
+            if hosted:
+                return await app.state.auth.begin_hosted(server, request)
+            return RedirectResponse(await run_in_threadpool(app.state.auth.begin, server))
         except AuthError as exc:
             return problem_page(
                 request, f"Could not start a login for {name}", exc.detail, 502
@@ -133,6 +192,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         error: str | None = None,
         error_description: str | None = None,
     ):
+        if hosted:
+            raise HTTPException(status_code=404, detail="not found")
         if error:
             return problem_page(
                 request, "The tenant refused the login", error_description or error
@@ -146,6 +207,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except AuthError as exc:
             return problem_page(request, "The login did not complete", exc.detail)
         return RedirectResponse("/", status_code=303)
+
+    if hosted:
+        @app.post("/auth/mcp/callback")
+        async def hosted_mcp_callback(request: Request):
+            return await hosted.handoff.receive("mcp", request)
+
+        @app.get("/auth/mcp/complete")
+        async def hosted_mcp_complete(request: Request):
+            staged = hosted.handoff.consume("mcp", request)
+            if staged is None:
+                return JSONResponse({"detail": "Invalid connection transaction"}, status_code=400)
+            try:
+                await app.state.auth.complete_hosted(staged)
+            except AuthError as exc:
+                return problem_page(request, "The connection did not complete", exc.detail)
+            return RedirectResponse("/", status_code=303)
 
     @app.get("/s/{name}", response_class=HTMLResponse)
     async def server_page(name: str, request: Request):
@@ -320,6 +397,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     register_editors(app, settings, templates)
     return app
-
-
-app = create_app()
