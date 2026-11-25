@@ -145,6 +145,23 @@ def revise(raw, old, new):
     return text.replace(old, new)
 
 
+def test_delete_refuses_a_recovery_started_between_read_and_delete(tmp_path, monkeypatch):
+    workspaces, state, github = setup(tmp_path)
+    store = workspaces.store
+    original_get = store.get
+
+    def racing_get(identity):
+        old = original_get(identity)
+        store.update(old, pending_action="commit")
+        return old
+
+    monkeypatch.setattr(store, "get", racing_get)
+    with pytest.raises(GitConflict, match="workspace changed"):
+        store.delete(state["id"], state["version"])
+    assert original_get(state["id"])["pending_action"] == "commit"
+    assert github.calls == []
+
+
 def test_open_and_preview_do_not_write_and_two_region_edits_preserve_each_other(tmp_path):
     workspaces, state, github = setup(tmp_path)
     read_draft = revise(FILES[STORE_PATH], "DB read", "DB read edited")

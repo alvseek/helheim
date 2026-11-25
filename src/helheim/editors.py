@@ -31,6 +31,10 @@ class NewWorkspace(EditorInput):
     repository: str
 
 
+class DeleteWorkspace(EditorInput):
+    version: int
+
+
 class SourceDraft(EditorInput):
     procedure: str
     backend: Literal["markdown", "db"]
@@ -97,15 +101,18 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         status = 409 if isinstance(exc, (GitConflict, GitUncertain)) else 400
         if isinstance(exc, (AuthError, mcp_client.ClientError)):
             status = 502
-        detail = getattr(exc, "detail", str(exc))[:1000]
+        detail = getattr(exc, "detail", str(exc))
+        if not isinstance(exc, GitError):
+            detail = detail[:1000]
         if request.method == "GET":
             return templates.TemplateResponse(
                 request, "error.html",
                 {"title": "Editor unavailable", "detail": detail}, status_code=status,
             )
-        return JSONResponse(
-            {"error": detail, "uncertain": isinstance(exc, GitUncertain)}, status_code=status
-        )
+        result = {"error": detail, "uncertain": isinstance(exc, GitUncertain)}
+        if isinstance(exc, GitError):
+            result["diagnostic"] = exc.diagnostic()
+        return JSONResponse(result, status_code=status)
 
     for error in (GitError, CompositionError, MemoryEditError, AuthError, mcp_client.ClientError):
         app.add_exception_handler(error, failure)
@@ -121,6 +128,11 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     async def new_workspace(body: NewWorkspace):
         state = await run_in_threadpool(app.state.workspaces.create, body.repository)
         return {"redirect": f"/procedures/{state['id']}"}
+
+    @app.post("/procedures/{identity}/delete")
+    async def delete_workspace(identity: str, body: DeleteWorkspace):
+        await run_in_threadpool(app.state.workspaces.store.delete, identity, body.version)
+        return {"deleted": True}
 
     @app.get("/procedures/{identity}")
     async def procedure(
@@ -192,8 +204,11 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     @app.post("/procedures/{identity}/reconcile")
     async def reconcile(identity: str):
         state = await run_in_threadpool(app.state.workspaces.reconcile, identity)
-        return {"workspace": state, "notice": "Outcome checked. Open the latest source in a new "
-                "tab before another save; your draft stays here."}
+        notice = ("Save status checked: the commit was saved; retry PR only."
+                  if state["pending_pr"] else
+                  "Save status checked. No recovery is pending. Open the latest source in a new "
+                  "tab to verify the result before another save; your draft stays here.")
+        return {"workspace": state, "notice": notice}
 
     @app.get("/memory")
     def memory_servers(request: Request):

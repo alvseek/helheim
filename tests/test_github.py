@@ -57,6 +57,22 @@ def test_write_server_error_is_uncertain_not_a_claim_of_failure():
         github.resolve("main")
 
 
+def test_graphql_error_diagnostics_redact_hosted_token_and_submitted_source():
+    token = "customsecret123"
+    source = "private submitted source"
+    message = "explanation\n" + "x" * 1200 + "\nlast line"
+    def runner(args, **options):
+        return response({"errors": [{"message": message + "\n" + token + "\n" + source}]})
+    github = GitHub(Repository("core", "owner", "repo"), runner=runner,
+                    credential_source=lambda: token)
+    with pytest.raises(GitError) as caught:
+        github.commit("helheim/" + "a" * 32, OID, "procedures/flow.md",
+                      source.encode(), "save")
+    assert caught.value.upstream_status == 200
+    assert message in caught.value.details
+    assert token not in caught.value.details and source not in caught.value.details
+
+
 def test_process_failure_does_not_expose_credentials_or_arbitrary_output():
     github = GitHub(Repository("core", "owner", "repo"),
                     runner=lambda *args, **kwargs:

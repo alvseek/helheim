@@ -163,6 +163,7 @@ textarea { font-family: var(--mono); font-size: 12px; }
 .source-section, .source-editor { margin: 24px 0; }
 .source-provenance { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .button:disabled { opacity: 0.45; cursor: not-allowed; }
+[data-status] { white-space: pre-wrap; overflow-wrap: anywhere; }
 [hidden] { display: none !important; }
 @media (max-width: 850px) {
   .editor-columns { grid-template-columns: 1fr; }

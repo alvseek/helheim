@@ -125,6 +125,20 @@ class WorkspaceStore:
                 raise GitConflict("workspace changed in another request; reload before continuing")
         return updated
 
+    def delete(self, identity, expected_version):
+        state = self.get(identity)
+        if state["version"] != expected_version:
+            raise GitConflict("workspace changed; reload the list before deleting")
+        if state["pending_action"] or state["pending_pr"]:
+            raise GitConflict("finish the pending save or PR recovery before deleting")
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            result = connection.execute(
+                "DELETE FROM procedure_workspace WHERE id=? AND version=?",
+                (identity, expected_version),
+            )
+            if result.rowcount != 1:
+                raise GitConflict("workspace changed; reload the list before deleting")
+
 
 class Workspaces:
     def __init__(self, store: WorkspaceStore, repositories: tuple[Repository, ...],
@@ -344,9 +358,11 @@ class Workspaces:
         if not state["branch_created"]:
             try:
                 github.create_branch(state["branch"], head)
-            except GitUncertain:
+            except GitUncertain as exc:
+                exc.stage = "create_branch"
                 raise
-            except GitError:
+            except GitError as exc:
+                exc.stage = "create_branch"
                 self.store.update(state, pending_action=None, pending_save=None)
                 raise
             state = self.store.update(state, branch_created=True, pending_action="commit")
@@ -354,9 +370,11 @@ class Workspaces:
             commit = github.commit(
                 state["branch"], head, github.repository.path(target.path), raw, pending["id"]
             )
-        except GitUncertain:
+        except GitUncertain as exc:
+            exc.stage = "commit"
             raise
-        except GitError:
+        except GitError as exc:
+            exc.stage = "commit"
             self.store.update(state, pending_action=None, pending_save=None)
             raise
         state = self.store.update(
@@ -402,7 +420,8 @@ class Workspaces:
         except GitError as exc:
             state = self.store.update(state, pending_action=None)
             return {"status": "saved_pr_pending", "workspace": state, "error": str(exc),
-                    "pr_uncertain": isinstance(exc, GitUncertain)}
+                    "pr_uncertain": isinstance(exc, GitUncertain),
+                    "diagnostic": {**exc.diagnostic(), "stage": "pull"}}
         state = self.store.update(
             state, pending_action=None, pending_pr=False,
             pull_number=pull["number"], pull_url=pull["html_url"],

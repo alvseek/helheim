@@ -172,11 +172,16 @@ function editor(kind, original) {
       context: { uuid: "uuid", tenant: "tenant", revision: "revision-0" } };
   const root = new Element({ editorInit: JSON.stringify(state) });
   const text = new Element();
+  const prLink = new Element();
+  prLink.hidden = true;
+  const actions = root.querySelector("[data-workspace]");
+  const actionQuery = actions.querySelector.bind(actions);
+  actions.querySelector = (selector) => selector === "[data-pr-link]" ? null : actionQuery(selector);
   const metadata = new Element();
   metadata.value = '{"title":"before"}';
   const buttons = {};
   for (const area of kind === "source" ? ["source"] : ["body", "metadata"]) {
-    for (const action of ["preview", "save"]) {
+    for (const action of kind === "source" ? ["save"] : ["preview", "save"]) {
       const button = new Element(kind === "source"
         ? { sourceAction: action } : { memoryAction: action, area });
       buttons[area + "-" + action] = button;
@@ -214,11 +219,14 @@ function editor(kind, original) {
   let revision = 0;
   let fail = false;
   let closeGate;
+  let saveGate;
+  let saveReply;
   let closeResult = { closed: true };
   const document = {
     querySelector(selector) {
       if (selector === 'meta[name="csrf-token"]') return { content: "token" };
       if (selector === "[data-editor-init]") return root;
+      if (selector === "[data-pr-link]") return prLink;
       if (selector === "[data-new-workspace]") return null;
       if (selector === "[data-procedure-selectors]") return kind === "source" ? selectors : null;
       return root.querySelector(selector);
@@ -237,6 +245,8 @@ function editor(kind, original) {
     async fetch(url, options) {
       const body = JSON.parse(options.body);
       requests.push({ url, body });
+      if (url.endsWith("/save") && saveGate) await saveGate;
+      if (url.endsWith("/save") && saveReply) return saveReply;
       if (fail) return { ok: false, json: async () => ({ error: "conflict" }) };
       if (url.endsWith("/close")) {
         if (closeGate) await closeGate;
@@ -247,7 +257,8 @@ function editor(kind, original) {
         ? { status: "saved", head: "head-" + revision,
           document: { id: "db", kind: "backend",
             path: "procedures/memory/storage-backends/db.md", sha256: "hash-" + revision },
-           workspace: {}, rendered: { db: "DB: " + body.draft, markdown: "Markdown: " + body.draft },
+           workspace: { pull_url: "https://github.com/owner/repo/pull/1", pull_number: 1 },
+           rendered: { db: "DB: " + body.draft, markdown: "Markdown: " + body.draft },
           diff: "" }
         : { saved: body.action, edit_context: { uuid: "uuid", tenant: "tenant", revision: "revision-" + revision },
           metadata: body.action === "metadata" ? body.draft : { title: "before" }, preview: body.draft, diff: "" };
@@ -255,7 +266,7 @@ function editor(kind, original) {
     },
   }, { filename: scriptPath });
   return {
-    root, text, metadata, buttons, requests, navigations, selectors, currentView, documentPaths,
+    root, text, metadata, buttons, requests, navigations, selectors, currentView, documentPaths, prLink,
     confirm(value) { confirm = value; },
     confirmations() { return confirmCount; },
     async close() { await close.fire("click"); },
@@ -266,6 +277,12 @@ function editor(kind, original) {
       return release;
     },
     closeResult(value) { closeResult = value; },
+    saveReply(value) { saveReply = value; },
+    holdSave() {
+      let release;
+      saveGate = new Promise((resolve) => { release = resolve; });
+      return release;
+    },
     async click(area, action) { await buttons[area + "-" + action].fire("click"); },
     async edit(value) { text.value = value; await text.fire("input"); },
     async select(name, value) {
@@ -281,6 +298,95 @@ function editor(kind, original) {
   };
 }
 
+test("source delayed save shows progress, blocks duplicate requests and retains draft", async () => {
+  const app = editor("source", "original");
+  await app.edit("edited");
+  const release = app.holdSave();
+  const saving = app.click("source", "save");
+  assert.match(app.buttons["source-save"].innerHTML, /spinner.*Saving…/);
+  assert.equal(app.buttons["source-save"].disabled, true);
+  assert.equal(app.text.value, "edited");
+  await app.click("source", "save");
+  assert.equal(app.requests.length, 1);
+  release();
+  await saving;
+  assert.equal(app.dirty(), false);
+});
+
+test("source save shows full multiline diagnostics and retains the draft", async () => {
+  const app = editor("source", "original");
+  await app.edit("edited");
+  const details = "line\n" + "x".repeat(1200) + "\nfinal line";
+  app.saveReply({ ok: false, json: async () => ({
+    error: "GitHub refused the request.", uncertain: false,
+    diagnostic: { upstream_status: 422, stage: "commit", details },
+  }) });
+  await app.click("source", "save");
+  const status = app.root.querySelector("[data-workspace]").querySelector("[data-status]").textContent;
+  assert.match(status, /Save refused/);
+  assert.match(status, /GitHub HTTP status: 422/);
+  assert.ok(status.includes(details));
+  assert.equal(app.dirty(), true);
+});
+
+test("lost save response offers status check without inventing an HTTP status", async () => {
+  const app = editor("source", "original");
+  await app.edit("edited");
+  app.saveReply({ ok: false, json: async () => ({
+    error: "GitHub write timed out.", uncertain: true,
+    diagnostic: { upstream_status: null, stage: "commit", details: null },
+  }) });
+  await app.click("source", "save");
+  const actions = app.root.querySelector("[data-workspace]");
+  assert.match(actions.querySelector("[data-status]").textContent, /outcome unknown/);
+  assert.doesNotMatch(actions.querySelector("[data-status]").textContent, /HTTP status/);
+  assert.equal(actions.querySelector('[data-workspace-action="reconcile"]').hidden, false);
+  assert.equal(actions.querySelector("[data-reconcile-help]").hidden, false);
+  assert.equal(app.dirty(), true);
+});
+
+test("workspace deletion confirms preservation and cancellation sends nothing", async () => {
+  const root = new Element({ workspace: "selected", version: "4" });
+  const button = new Element({ workspaceAction: "delete" });
+  button.closest = () => root;
+  root.groups.set("button", [button]);
+  let removed = false;
+  root.remove = () => { removed = true; };
+  let confirmed = false;
+  let confirmation;
+  const window = new Element();
+  window.confirm = (message) => { confirmation = message; return confirmed; };
+  const requests = [];
+  const document = {
+    querySelector(selector) {
+      return selector === 'meta[name="csrf-token"]' ? { content: "token" } : null;
+    },
+    querySelectorAll(selector) {
+      return selector === "[data-workspace-action]" ? [button] : [];
+    },
+  };
+  vm.runInNewContext(script, { document, window, fetch: async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    if (requests.length === 1) return { ok: false, status: 404, json: async () => ({ detail: "Not Found" }) };
+    return { ok: true, json: async () => ({ deleted: true }) };
+  } }, { filename: scriptPath });
+  await button.fire("click");
+  assert.match(confirmation, /branch, commits and PR are kept/);
+  assert.equal(requests.length, 0);
+  assert.equal(removed, false);
+  confirmed = true;
+  await button.fire("click");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/procedures/selected/delete");
+  assert.equal(requests[0].body.version, 4);
+  assert.equal(root.querySelector("[data-status]").textContent, "Delete workspace failed (HTTP 404): Not Found");
+  assert.equal(removed, false);
+  await button.fire("click");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(removed, true);
+});
+
 for (const kind of ["source", "memory"]) {
   const area = kind === "source" ? "source" : "body";
   for (const original of ["α\r\nβ\r\n", "α\nβ\n", "\rα\rβ\r", "α\r\nβ\nγ\rδ😀"]) {
@@ -289,34 +395,40 @@ for (const kind of ["source", "memory"]) {
       assert.equal(app.text.value, normal(original));
       assert.equal(app.dirty(), false);
       assert.equal(app.buttons[area + "-save"].disabled, true);
-      await app.click(area, "preview");
-      assert.equal(app.requests.at(-1).body.draft, original);
+      if (kind === "memory") {
+        await app.click(area, "preview");
+        assert.equal(app.requests.at(-1).body.draft, original);
+      }
       const edited = normal(original).replace("α", "A😀");
       await app.edit(edited);
       assert.equal(app.dirty(), true);
       assert.equal(app.buttons[area + "-save"].disabled, false);
-      await app.click(area, "preview");
       const expected = original.replace("α", "A😀");
-      assert.equal(app.requests.at(-1).body.draft, expected);
+      if (kind === "memory") {
+        await app.click(area, "preview");
+        assert.equal(app.requests.at(-1).body.draft, expected);
+      }
       assert.equal(app.dirty(), true);
       await app.click(area, "save");
       assert.equal(app.requests.at(-1).body.draft, expected);
       assert.equal(app.text.value, edited);
       assert.equal(app.dirty(), false);
       assert.equal(app.buttons[area + "-save"].disabled, true);
-      await app.click(area, "preview");
-      assert.equal(app.requests.at(-1).body.draft, expected);
+      if (kind === "memory") {
+        await app.click(area, "preview");
+        assert.equal(app.requests.at(-1).body.draft, expected);
+      }
       await app.edit(edited.replace("β", "B"));
       await app.click(area, "save");
       assert.equal(app.requests.at(-1).body.draft, expected.replace("β", "B"));
       assert.equal(app.dirty(), false);
       if (kind === "source") {
-        assert.equal(app.root.querySelector("[data-preview-db]").textContent, "DB: " + expected);
-        assert.equal(app.root.querySelector("[data-preview-markdown]").textContent, "Markdown: " + expected);
         assert.match(app.requests.at(-1).body.expected_head, /^head-/);
         assert.match(app.requests.at(-1).body.expected_document_hash, /^hash-/);
         assert.equal(app.requests.at(-1).body.document, "db");
         assert.equal(app.requests.at(-1).body.region, "wrap-up.report");
+        assert.equal(app.prLink.hidden, false);
+        assert.equal(app.prLink.textContent, "PR #1");
       } else assert.match(app.requests.at(-1).body.expected_revision, /^revision-/);
     });
   }
