@@ -24,12 +24,13 @@
   {% endif %}
   <div class="servers">
     {% for workspace in workspaces %}
-      <article class="server" data-workspace="{{ workspace.id }}">
+      <article class="server" data-workspace="{{ workspace.id }}" data-version="{{ workspace.version }}">
         <a href="/procedures/{{ workspace.id }}"><strong>{{ workspace.repository.owner }}/{{ workspace.repository.name }}</strong></a>
         <p><code>{{ workspace.branch }}</code></p>
         <p class="subtle">Last observed commit: {{ workspace.head_oid }}</p>
         {% if workspace.pending_action %}
-          <button class="button" data-workspace-action="reconcile">Reconcile unfinished save</button>
+          <button class="button" data-workspace-action="reconcile">Check save status</button>
+          <span data-reconcile-help>Checks whether GitHub created the branch or saved the commit. It won't resend your edit.</span>
         {% endif %}
         {% if workspace.pending_pr and not workspace.pending_action %}
           <p class="notice">Source is saved to the branch; the PR is not yet confirmed.</p>
@@ -37,6 +38,7 @@
         {% endif %}
         <a data-pr-link {% if workspace.pull_url|github_url %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %}
           target="_blank" rel="noopener noreferrer">Open draft PR</a>
+        <button class="button" data-workspace-action="delete">Delete workspace</button>
         <p data-status role="status" aria-live="polite"></p>
       </article>
     {% endfor %}

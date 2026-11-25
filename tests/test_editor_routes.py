@@ -10,7 +10,7 @@ from test_workspaces import BASE, FILES, FLOW_BODY, FLOW_PATH, STORE_PATH, FakeG
 from helheim.app import create_app
 from helheim.config import Server, Settings
 from helheim.editors import github_url
-from helheim.github import Repository
+from helheim.github import GitHub, Repository
 from helheim.memory_editor import MemoryEditor
 from helheim.workspaces import Workspaces, WorkspaceStore
 
@@ -48,6 +48,7 @@ def source_request(state, draft):
     return {
         "procedure": state["procedure"], "backend": state["backend"],
         "document": state["document_id"], "draft": draft,
+        "region": state["region"],
         "expected_head": state["head"],
         "expected_document_hash": state["document_hash"],
     }
@@ -66,9 +67,92 @@ def workspace(client, headers):
     return response.json()["redirect"]
 
 
+@pytest.mark.parametrize(("status", "uncertain"), [(422, False), (503, True)])
+def test_save_preserves_safe_diagnostics_through_adapter_and_route(rig, status, uncertain):
+    import subprocess
+
+    _, client, headers, github, _ = rig
+    path = workspace(client, headers)
+    state = initial(client.get(path, params={"document": "db", "region": "flow.read"}))
+    explanation = "first line\n" + "detail " * 200 + "\nfinal line"
+    draft = "private submitted source"
+
+    def runner(args, **options):
+        body = {"message": explanation, "errors": [{"field": "head", "message": "invalid"}],
+                "request": draft}
+        return subprocess.CompletedProcess(
+            args, 1, f"HTTP/2.0 {status} Error\nAuthorization: secret\n\n" + json.dumps(body),
+            "secret stderr",
+        )
+
+    real = GitHub(github.repository, runner=runner)
+    github.commit = real.commit
+    result = client.post(path + "/save", json=source_request(state, draft), headers=headers)
+    data = result.json()
+    assert data["uncertain"] is uncertain
+    assert data["diagnostic"]["upstream_status"] == status
+    assert data["diagnostic"]["stage"] == "commit"
+    assert explanation in data["diagnostic"]["details"]
+    assert "head: invalid" in data["diagnostic"]["details"]
+    assert draft not in result.text and "secret" not in result.text
+
+
+def test_delete_workspace_is_local_version_checked_and_guards_recovery(rig):
+    app, client, headers, github, _ = rig
+    first = workspace(client, headers)
+    second = workspace(client, headers)
+    identity = first.rsplit("/", 1)[1]
+    store = app.state.workspaces.store
+    state = store.get(identity)
+    assert 'data-workspace-action="delete"' in client.get("/procedures").text
+    state = store.update(state, pull_number=7, pull_url="https://github.com/owner/repo/pull/7")
+    github.calls.clear()
+    stale = client.post(first + "/delete", json={"version": 0}, headers=headers)
+    assert stale.status_code == 409
+    for changes in ({"pending_action": "commit"}, {"pending_action": None, "pending_pr": True}):
+        state = store.update(state, **changes)
+        blocked = client.post(first + "/delete", json={"version": state["version"]},
+                              headers=headers)
+        assert blocked.status_code == 409
+        assert store.get(identity)["id"] == identity
+    state = store.update(state, pending_pr=False)
+    deleted = client.post(first + "/delete", json={"version": state["version"]}, headers=headers)
+    assert deleted.json() == {"deleted": True}
+    assert [row["id"] for row in store.list()] == [second.rsplit("/", 1)[1]]
+    assert github.calls == []
+
+
+def test_pr_failure_keeps_confirmed_commit_and_adapter_diagnostics(rig):
+    import subprocess
+
+    _, client, headers, github, _ = rig
+    path = workspace(client, headers)
+    state = initial(client.get(path, params={"document": "db", "region": "flow.read"}))
+    message = "PR refused\n" + "long reason " * 120 + "\nlast reason"
+    def runner(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args, 1, "HTTP/2.0 403 Error\n\n" + json.dumps({"message": message}), ""
+        )
+    real = GitHub(github.repository, runner=runner)
+    github.ensure_pull = lambda branch, identity: real.request(
+        "repos/owner/repo/pulls", method="POST", data={}
+    )
+    response = client.post(path + "/save", json=source_request(state, "new text"), headers=headers)
+    result = response.json()
+    assert result["status"] == "saved_pr_pending"
+    assert result["workspace"]["pending_pr"] is True
+    assert result["diagnostic"]["upstream_status"] == 403
+    assert result["diagnostic"]["details"] == message
+    assert github.calls.count("commit") == 1
+
+
 def test_source_view_preview_and_save_are_distinct(rig):
     app, client, headers, github, memory = rig
     path = workspace(client, headers)
+    github.commits[BASE][STORE_PATH] += (
+        b'@start region id="other.private"\r\nUnrelated section\r\n@end region\r\n'
+    )
+    baseline = github.commits[BASE][STORE_PATH]
     composed = client.get(path)
     assert composed.status_code == 200
     assert "Owning document" not in composed.text
@@ -80,10 +164,20 @@ def test_source_view_preview_and_save_are_distinct(rig):
     assert github.calls == []
 
     page = client.get(path + "?document=db")
-    state = initial(page)
-    assert "Owning document" in page.text and "Save document to draft PR" in page.text
-    assert "delivered to db only" in page.text
-    assert textarea(page).encode("utf-8") == STORE_PATH_BYTES
+    assert "db sections used by flow" in page.text and "Unrelated section" not in page.text
+    assert 'select name="backend"' not in page.text
+    assert 'name="backend"' in composed.text
+    assert composed.text.index('name="document"') < composed.text.index('name="backend"')
+    edit_href = re.search(r'href="([^"]+region=flow.read[^"]+)">Edit section', composed.text)[1]
+    editing = client.get(path + html.unescape(edit_href))
+    state = initial(editing)
+    assert "Composed instructions · db" in editing.text and "DB write" in editing.text
+    assert textarea(editing) == "DB read" and "Unrelated section" not in editing.text
+    assert "Save section to draft PR" in editing.text
+    assert "Preview both backends" not in editing.text
+    assert "data-source-preview" not in editing.text
+    md = client.get(path, params={"document": "procedures/memory/storage-backends/markdown.md"})
+    assert "MD read" in md.text and "MD write" in md.text and "DB read" not in md.text
     for text in ("Composed instructions ·", "Read, then write.", "Shared rules.", "Edit document"):
         assert text not in page.text
     assert "Preview, not deployed content" in page.text
@@ -103,9 +197,7 @@ def test_source_view_preview_and_save_are_distinct(rig):
     invalid_identity["document"] = "../not-a-declared-document"
     refused = client.post(path + "/save", json=invalid_identity, headers=headers)
     assert refused.status_code == 400 and github.calls == []
-    revision_draft = STORE_PATH_BYTES.decode("utf-8").replace(
-        "DB read", "Unsaved § missing-op"
-    )
+    revision_draft = "Unsaved § missing-op"
     preview = client.post(path + "/preview",
                           json=source_request(state, revision_draft), headers=headers)
     assert preview.status_code == 200
@@ -116,12 +208,25 @@ def test_source_view_preview_and_save_are_distinct(rig):
     assert preview.json()["dependents"] == ["flow"]
     assert preview.json()["applicability"] == ["db"]
     assert github.calls == []
-    saved_draft = STORE_PATH_BYTES.decode("utf-8").replace("DB read", "Saved read")
+    for bad in (dict(region="other.private"), dict(draft="@end region\n")):
+        body = source_request(state, "unallowed") | bad
+        assert client.post(path + "/save", json=body, headers=headers).status_code == 400
+    assert github.calls == []
+    saved_draft = "Saved read"
     saved = client.post(
         path + "/save", json=source_request(state, saved_draft), headers=headers
     )
     assert saved.status_code == 200 and saved.json()["status"] == "saved"
+    assert saved.json()["workspace"]["pull_number"] == 1
+    for params in ({}, {"document": "flow"}, {"document": "db", "region": "flow.read"},
+                   {"revision": "base"}):
+        view = client.get(path, params=params)
+        assert 'data-pr-link href="https://github.com/owner/repo/pull/1"' in view.text
+        assert ">PR #1</a>" in view.text
     assert saved.json()["head"] != BASE
+    assert github.commits[saved.json()["head"]][STORE_PATH] == baseline.replace(
+        b"DB read", b"Saved read"
+    )
     assert saved.json()["document"]["path"] == "procedures/memory/storage-backends/db.md"
     assert github.calls.count("commit") == 1
     duplicate = client.post(path + "/save",
@@ -149,7 +254,7 @@ def test_source_view_preview_and_save_are_distinct(rig):
 def test_view_falls_back_to_composed_instructions(rig, document, notice):
     _, client, headers, github, _ = rig
     path = workspace(client, headers)
-    state = initial(client.get(path, params={"document": "db"}))
+    state = initial(client.get(path, params={"document": "db", "region": "flow.read"}))
 
     page = client.get(path, params={"backend": "markdown", "document": document})
     assert page.status_code == 200, page.text
@@ -173,9 +278,9 @@ def test_view_does_not_switch_to_a_different_source_with_the_same_id(rig):
         "@end component\n"
     ))
     path = workspace(client, headers)
-    db_view = client.get(path, params={"backend": "db", "document": "db"})
+    db_view = client.get(path, params={"backend": "db", "document": "db", "region": "flow.read"})
     assert initial(db_view)["document_path"] == STORE_PATH
-    assert f'value="db" data-path="{STORE_PATH}"' in db_view.text
+    assert f'value="{STORE_PATH}"' in db_view.text
     md_view = client.get(path, params={"backend": "markdown", "document": "db"})
     assert initial(md_view)["document_path"] == component_path
 
@@ -235,6 +340,7 @@ WRITES = [
     }),
     ("/procedures/workspace/retry-pr", {}),
     ("/procedures/workspace/reconcile", {}),
+    ("/procedures/workspace/delete", {"version": 0}),
     ("/memory-edit/editor/preview", {"action": "body", "draft": "x", "expected_revision": "r"}),
     ("/memory-edit/editor/save", {"action": "body", "draft": "x", "expected_revision": "r"}),
     ("/memory-edit/editor/close", {}),
@@ -256,6 +362,7 @@ def test_write_inventory_covers_every_registered_post_route(rig):
         "/s/{name}/t/{tool}", "/procedures/workspaces",
         "/procedures/{identity}/preview", "/procedures/{identity}/save",
         "/procedures/{identity}/retry-pr", "/procedures/{identity}/reconcile",
+        "/procedures/{identity}/delete",
         "/memory-edit/{identity}/preview", "/memory-edit/{identity}/save",
         "/memory-edit/{identity}/close",
     }

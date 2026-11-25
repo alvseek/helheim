@@ -31,10 +31,15 @@ class NewWorkspace(EditorInput):
     repository: str
 
 
+class DeleteWorkspace(EditorInput):
+    version: int
+
+
 class SourceDraft(EditorInput):
     procedure: str
     backend: Literal["markdown", "db"]
     document: str
+    region: str | None = None
     draft: str
     expected_head: str
     expected_document_hash: str
@@ -96,15 +101,18 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         status = 409 if isinstance(exc, (GitConflict, GitUncertain)) else 400
         if isinstance(exc, (AuthError, mcp_client.ClientError)):
             status = 502
-        detail = getattr(exc, "detail", str(exc))[:1000]
+        detail = getattr(exc, "detail", str(exc))
+        if not isinstance(exc, GitError):
+            detail = detail[:1000]
         if request.method == "GET":
             return templates.TemplateResponse(
                 request, "error.html",
                 {"title": "Editor unavailable", "detail": detail}, status_code=status,
             )
-        return JSONResponse(
-            {"error": detail, "uncertain": isinstance(exc, GitUncertain)}, status_code=status
-        )
+        result = {"error": detail, "uncertain": isinstance(exc, GitUncertain)}
+        if isinstance(exc, GitError):
+            result["diagnostic"] = exc.diagnostic()
+        return JSONResponse(result, status_code=status)
 
     for error in (GitError, CompositionError, MemoryEditError, AuthError, mcp_client.ClientError):
         app.add_exception_handler(error, failure)
@@ -121,32 +129,40 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         state = await run_in_threadpool(app.state.workspaces.create, body.repository)
         return {"redirect": f"/procedures/{state['id']}"}
 
+    @app.post("/procedures/{identity}/delete")
+    async def delete_workspace(identity: str, body: DeleteWorkspace):
+        await run_in_threadpool(app.state.workspaces.store.delete, identity, body.version)
+        return {"deleted": True}
+
     @app.get("/procedures/{identity}")
     async def procedure(
         identity: str, request: Request, procedure: str | None = None,
         backend: Literal["markdown", "db"] = "db",
         revision: Literal["branch", "base"] = "branch",
-        document: str | None = None, span: str | None = None, document_path: str | None = None,
+        document: str | None = None, region: str | None = None, document_path: str | None = None,
+        composed: bool = False,
     ):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, procedure, backend, document or None,
             revision=revision, allow_missing_document=True, expected_document_path=document_path,
+            region=region,
         )
         original = view["original"]
+        backend = view["backend"]
         init = None
-        if original and revision == "branch":
+        if original and revision == "branch" and (original.kind != "backend" or region):
             init = {
                 "kind": "source", "id": identity, "procedure": view["procedure"],
                 "backend": backend, "document_id": original.id,
                 "document_kind": original.kind, "document_path": original.path,
-                "span": span,
+                "region": region,
                 "head": view["head"], "document_hash": original.sha256,
                 "original": view["original_text"],
                 "pending": bool(view["workspace"]["pending_action"]
                                 or view["workspace"]["pending_pr"]),
             }
         return templates.TemplateResponse(request, "procedure.html", {
-            **view, "backend": backend, "span": span,
+            **view, "region": region, "composed": not original or (region and composed),
             "document_unavailable": bool(document) and original is None,
             "composer_version": composer_version, "init": init,
         })
@@ -155,7 +171,7 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     async def preview_source(identity: str, body: SourceDraft):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, body.procedure, body.backend,
-            body.document, body.draft,
+            body.document, body.draft, region=body.region,
         )
         original = view["original"]
         if (view["head"] != body.expected_head
@@ -178,7 +194,7 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     async def save_source(identity: str, body: SourceDraft):
         return await run_in_threadpool(
             app.state.workspaces.save, identity, body.procedure, body.backend, body.document,
-            body.draft, body.expected_head, body.expected_document_hash,
+            body.draft, body.expected_head, body.expected_document_hash, body.region,
         )
 
     @app.post("/procedures/{identity}/retry-pr")
@@ -188,8 +204,11 @@ def register_editors(app: FastAPI, settings: Settings, templates):
     @app.post("/procedures/{identity}/reconcile")
     async def reconcile(identity: str):
         state = await run_in_threadpool(app.state.workspaces.reconcile, identity)
-        return {"workspace": state, "notice": "Outcome checked. Open the latest source in a new "
-                "tab before another save; your draft stays here."}
+        notice = ("Save status checked: the commit was saved; retry PR only."
+                  if state["pending_pr"] else
+                  "Save status checked. No recovery is pending. Open the latest source in a new "
+                  "tab to verify the result before another save; your draft stays here.")
+        return {"workspace": state, "notice": notice}
 
     @app.get("/memory")
     def memory_servers(request: Request):

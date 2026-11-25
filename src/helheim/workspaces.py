@@ -1,9 +1,7 @@
 """Remote procedure workspaces; local persistence holds references, never source drafts.
 
-One complete Markdown document owns each procedure, component or storage backend. A
-workspace opens that whole document, previews it by replacing the file in an in-memory
-snapshot, and saves the complete blob through the guarded Git adapter. Rendered spans are
-display information; the document bytes are the only write target.
+Each edit belongs to one Markdown document. Backend section edits replace a named
+region in the original source. Preview and Save both use the resulting complete blob.
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from procedure_composer import Catalog, MemorySource
+from procedure_composer.document import _events
 
 from .github import GitConflict, GitError, GitHub, GitUncertain, Repository
 
@@ -39,6 +38,40 @@ def source_bytes(text: str) -> bytes:
 def document_row(edit) -> dict:
     """A JSON-safe view of one owning document: never its bytes."""
     return {"id": edit.id, "kind": edit.kind, "path": edit.path, "sha256": edit.sha256}
+
+
+def region_source(catalog, procedure, backend, document, region, draft=None):
+    """Splice only the selected region, using the pinned composer's fence-aware lexer."""
+    if document.kind != "backend" or not any(
+        span.path == document.path and span.target == region
+        for span in catalog.compose(procedure, backend).spans
+    ):
+        raise GitError("region does not belong to this procedure and document")
+    text = document.raw.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    start = None
+    for event in _events(text, document.path):
+        if event[0] != "directive":
+            continue
+        _, action, _, attrs, line = event
+        if action == "start" and attrs.get("id") == region:
+            start = line
+        elif action == "end" and start is not None:
+            interior = "".join(lines[start:line - 1])
+            # Keep the structural newline before @end outside the textarea.
+            ending = re.search(r"(\r\n|\r|\n)\Z", interior)
+            original = interior[:ending.start()] if ending else interior
+            if draft is None or draft == original:
+                return original, document.raw
+            if any(e[0] == "directive" for e in _events(draft, document.path)):
+                raise GitError("a section edit cannot change region markers")
+            marker = lines[start - 1]
+            separator = ending[0] if ending else marker[len(marker.rstrip("\r\n")):]
+            if draft.endswith("\r") and separator == "\n":
+                separator = "\r\n"
+            raw = "".join(lines[:start]) + draft + separator + "".join(lines[line - 1:])
+            return original, source_bytes(raw)
+    raise GitError("source region not found")
 
 
 class WorkspaceStore:
@@ -91,6 +124,20 @@ class WorkspaceStore:
             if result.rowcount != 1:
                 raise GitConflict("workspace changed in another request; reload before continuing")
         return updated
+
+    def delete(self, identity, expected_version):
+        state = self.get(identity)
+        if state["version"] != expected_version:
+            raise GitConflict("workspace changed; reload the list before deleting")
+        if state["pending_action"] or state["pending_pr"]:
+            raise GitConflict("finish the pending save or PR recovery before deleting")
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            result = connection.execute(
+                "DELETE FROM procedure_workspace WHERE id=? AND version=?",
+                (identity, expected_version),
+            )
+            if result.rowcount != 1:
+                raise GitConflict("workspace changed; reload the list before deleting")
 
 
 class Workspaces:
@@ -218,7 +265,8 @@ class Workspaces:
         return rendered, errors
 
     def preview(self, identity, procedure, backend, document_id=None, draft=None,
-                revision="branch", *, allow_missing_document=False, expected_document_path=None):
+                revision="branch", *, allow_missing_document=False, expected_document_path=None,
+                region=None):
         state, head, source, catalog = self.snapshot(identity, revision)
         if not catalog.procedures:
             raise GitError("this revision contains no procedures")
@@ -226,6 +274,14 @@ class Workspaces:
         if procedure not in catalog.procedures:
             raise GitError("procedure is not in the configured catalog")
         original = None
+        rendered, errors = self.render(catalog, procedure)
+        choices = {}
+        for selected in dict.fromkeys((backend, *BACKENDS)):
+            for edit in rendered[selected].documents:
+                choices.setdefault(edit.path, (selected, edit))
+        if allow_missing_document and document_id in choices:
+            backend, edit = choices[document_id]
+            document_id = edit.id
         if document_id is not None:
             original = self.document(
                 catalog, procedure, backend, document_id,
@@ -235,11 +291,16 @@ class Workspaces:
             if (original and expected_document_path is not None
                     and original.path != expected_document_path):
                 original = None
+        original_text = original.raw.decode("utf-8") if original else None
+        if region is not None:
+            if original is None:
+                raise GitError("region needs a declared document")
+            original_text, raw = region_source(catalog, procedure, backend, original, region, draft)
         if draft is not None:
             if original is None:
                 raise GitError("preview needs a declared document identity")
-            catalog = self.checked_overlay(source, original, source_bytes(draft))
-        rendered, errors = self.render(catalog, procedure)
+            catalog = self.checked_overlay(source, original, raw if region else source_bytes(draft))
+            rendered, errors = self.render(catalog, procedure)
         return {
             "workspace": state, "head": head, "catalog": catalog, "original": original,
             "procedure": procedure, "revision": revision,
@@ -248,7 +309,8 @@ class Workspaces:
             "documents": {selected: [document_row(edit) for edit in result.documents]
                           for selected, result in rendered.items()},
             "applicability": self.applicability(catalog, original.path) if original else (),
-            "original_text": original.raw.decode("utf-8") if original else None,
+            "original_text": original_text, "backend": backend,
+            "choices": [edit for _, edit in choices.values()],
         }
 
     def _check_pull(self, state, github):
@@ -263,7 +325,7 @@ class Workspaces:
             )
 
     def save(self, identity, procedure, backend, document_id, draft, expected_head,
-             expected_document_hash):
+             expected_document_hash, region=None):
         state, github = self.bound(identity)
         if state["pending_action"]:
             raise GitUncertain("a prior save needs reconciliation before another write")
@@ -281,7 +343,8 @@ class Workspaces:
             raise GitConflict(
                 "branch or document changed; draft retained, reload before saving"
             )
-        raw = source_bytes(draft)
+        raw = (region_source(catalog, procedure, backend, target, region, draft)[1]
+               if region is not None else source_bytes(draft))
         if raw == source.read(target.path):
             raise GitError("no document changes to save")
         overlay = self.checked_overlay(source, target, raw)
@@ -295,9 +358,11 @@ class Workspaces:
         if not state["branch_created"]:
             try:
                 github.create_branch(state["branch"], head)
-            except GitUncertain:
+            except GitUncertain as exc:
+                exc.stage = "create_branch"
                 raise
-            except GitError:
+            except GitError as exc:
+                exc.stage = "create_branch"
                 self.store.update(state, pending_action=None, pending_save=None)
                 raise
             state = self.store.update(state, branch_created=True, pending_action="commit")
@@ -305,9 +370,11 @@ class Workspaces:
             commit = github.commit(
                 state["branch"], head, github.repository.path(target.path), raw, pending["id"]
             )
-        except GitUncertain:
+        except GitUncertain as exc:
+            exc.stage = "commit"
             raise
-        except GitError:
+        except GitError as exc:
+            exc.stage = "commit"
             self.store.update(state, pending_action=None, pending_save=None)
             raise
         state = self.store.update(
@@ -353,7 +420,8 @@ class Workspaces:
         except GitError as exc:
             state = self.store.update(state, pending_action=None)
             return {"status": "saved_pr_pending", "workspace": state, "error": str(exc),
-                    "pr_uncertain": isinstance(exc, GitUncertain)}
+                    "pr_uncertain": isinstance(exc, GitUncertain),
+                    "diagnostic": {**exc.diagnostic(), "stage": "pull"}}
         state = self.store.update(
             state, pending_action=None, pending_pr=False,
             pull_number=pull["number"], pull_url=pull["html_url"],

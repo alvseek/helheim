@@ -28,7 +28,17 @@ _SAFE_ENV = {
 
 
 class GitError(RuntimeError):
-    """A bounded actionable failure, without arbitrary process output or credentials."""
+    """An actionable failure with optional safe GitHub diagnostics."""
+
+    def __init__(self, message, *, upstream_status=None, details=None, stage=None):
+        super().__init__(message)
+        self.upstream_status = upstream_status
+        self.details = details
+        self.stage = stage
+
+    def diagnostic(self):
+        return {"upstream_status": self.upstream_status, "details": self.details,
+                "stage": self.stage}
 
 
 class GitConflict(GitError):
@@ -91,6 +101,7 @@ class GitHub:
         if data is not None:
             args.extend(["--input", "-"])
             payload = json.dumps(data, ensure_ascii=False)
+        token = None
         try:
             kwargs = dict(input=payload, text=True, encoding="utf-8",
                           capture_output=True, timeout=30, check=False)
@@ -135,22 +146,73 @@ class GitHub:
         status = int(status_match.group(1))
         if missing and status == 404:
             return None
+        details = self._error_details(body, data, token)
         if status in (409, 412, 422):
             raise GitConflict(
-                "GitHub refused the changed or conflicting workspace; reload before saving"
+                "GitHub refused the request.", upstream_status=status, details=details
             )
         if status >= 500 and method != "GET":
-            raise GitUncertain("GitHub write outcome is unknown; reconcile before retrying")
+            raise GitUncertain("GitHub write outcome is unknown.", upstream_status=status,
+                               details=details)
         if not 200 <= status < 300:
-            raise GitError(f"GitHub request refused (HTTP {status}); check repository access")
+            raise GitError("GitHub refused the request.", upstream_status=status, details=details)
         try:
-            return json.loads(body)
+            parsed = json.loads(body)
         except (TypeError, json.JSONDecodeError) as exc:
             if method != "GET":
                 raise GitUncertain(
                     "GitHub write returned an unreadable result; reconcile before retrying"
                 ) from exc
             raise GitError("GitHub returned an unreadable response") from exc
+        if endpoint == "graphql" and isinstance(parsed, dict) and parsed.get("errors"):
+            raise GitConflict("GitHub refused the commit.", upstream_status=status,
+                              details=self._error_details(body, data, token))
+        return parsed
+
+    @staticmethod
+    def _error_details(body, data, token):
+        """Expose only GitHub's message and validation fields, not headers or request data."""
+        try:
+            parsed = json.loads(body)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        sensitive = [token] if token else []
+        try:
+            additions = data["variables"]["input"]["fileChanges"]["additions"]
+            for item in additions:
+                encoded = item["contents"]
+                source = base64.b64decode(encoded).decode("utf-8")
+                sensitive.extend((encoded, source))
+                sensitive.extend(line for line in source.splitlines() if len(line) >= 4)
+        except (KeyError, TypeError, ValueError, UnicodeError):
+            pass
+
+        def safe(text):
+            if not isinstance(text, str):
+                return None
+            for value in sensitive:
+                if value:
+                    text = text.replace(value, "[redacted]")
+            text = re.sub(r"(?im)^.*(?:authorization|x-api-key|cookie):.*$", "[redacted]", text)
+            return re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b",
+                          "[redacted]", text)
+
+        parts = []
+        message = safe(parsed.get("message"))
+        if message:
+            parts.append(message)
+        errors = parsed.get("errors")
+        if isinstance(errors, list):
+            for item in errors:
+                if isinstance(item, str):
+                    parts.append(safe(item))
+                elif isinstance(item, dict):
+                    fields = [safe(item.get(key))
+                              for key in ("resource", "field", "code", "message")]
+                    parts.append(": ".join(value for value in fields if value))
+        return "\n".join(value for value in parts if value) or None
 
     def _validate_hosted_request(self, endpoint, method, data):
         if endpoint == "graphql":
@@ -298,10 +360,6 @@ class GitHub:
                 raise GitUncertain(
                     "commit identity is unreadable; reconcile before retrying"
                 ) from exc
-        if payload.get("errors"):
-            raise GitConflict(
-                "GitHub commit precondition failed; inspect the branch before retrying"
-            )
         raise GitUncertain("commit outcome is unknown; reconcile before retrying")
 
     def commit_info(self, commit: str):

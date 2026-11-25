@@ -264,6 +264,7 @@ def source_request(state, draft):
     return {
         "procedure": state["procedure"], "backend": state["backend"],
         "document": state["document_id"], "draft": draft,
+        "region": state["region"],
         "expected_head": state["head"], "expected_document_hash": state["document_hash"],
     }
 
@@ -283,12 +284,12 @@ def test_served_uncertain_branch_creation_refuses_adoption_and_reload(git):
         created = client.post("/procedures/workspaces",
                               json={"repository": "core"}, headers=headers)
         path = created.json()["redirect"]
-        page = client.get(path + "?document=db")
+        page = client.get(path + "?document=db&region=flow.read")
         state = initial(page)
         assert not visible(page, "reconcile") and not visible(page, "retry-pr")
         git.faults(branch="lost")
         refused = client.post(path + "/save",
-                              json=source_request(state, edited("unsaved branch draft")),
+                              json=source_request(state, "unsaved branch draft"),
                               headers=headers)
         assert refused.status_code == 409 and refused.json()["uncertain"] is True
         reloaded = client.get(path + "?document=db")
@@ -306,27 +307,27 @@ def test_served_page_offers_retry_pr_after_confirmed_commit(git):
         created = client.post("/procedures/workspaces",
                               json={"repository": "core"}, headers=headers)
         path = created.json()["redirect"]
-        page = client.get(path + "?document=db")
+        page = client.get(path + "?document=db&region=flow.read")
         state = initial(page)
         git.faults(commit="lost")
         refused = client.post(path + "/save",
-                              json=source_request(state, edited("saved commit draft")),
+                              json=source_request(state, "saved commit draft"),
                               headers=headers)
         assert refused.status_code == 409 and refused.json()["uncertain"] is True
-        page = client.get(path + "?document=db")
+        page = client.get(path + "?document=db&region=flow.read")
         assert visible(page, "reconcile") and not visible(page, "retry-pr")
         reconciled = client.post(path + "/reconcile", headers=headers)
         assert reconciled.status_code == 200
         assert reconciled.json()["workspace"]["pending_pr"] is True
         head = reconciled.json()["workspace"]["head_oid"]
-        page = client.get(path + "?document=db")
+        page = client.get(path + "?document=db&region=flow.read")
         assert initial(page)["pending"] is True
         assert visible(page, "retry-pr") and not visible(page, "reconcile")
         retried = client.post(path + "/retry-pr", headers=headers)
         assert retried.status_code == 200 and retried.json()["status"] == "saved"
         assert retried.json()["workspace"]["head_oid"] == head
         assert retried.json()["workspace"]["pull_number"] == 1
-        page = client.get(path + "?document=db")
+        page = client.get(path + "?document=db&region=flow.read")
         assert "https://github.com/owner/repo/pull/1" in page.text
         assert not visible(page, "retry-pr") and not visible(page, "reconcile")
         assert git.counters()["commit"] == 1

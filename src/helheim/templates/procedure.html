@@ -8,7 +8,8 @@
     <span class="badge">Preview, not deployed content</span>
   </div>
   <p><code>{{ workspace.repository.owner }}/{{ workspace.repository.name }}</code> ·
-    <code>{{ workspace.branch }}</code></p>
+    <code>{{ workspace.branch }}</code> ·
+    <a data-pr-link {% if workspace.pull_url|github_url and workspace.pull_number %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %} target="_blank" rel="noopener noreferrer">PR #{{ workspace.pull_number or '' }}</a></p>
   <form method="get" action="/procedures/{{ workspace.id }}" class="editor-selectors"
         data-procedure-selectors autocomplete="off">
     <label>Procedure
@@ -18,21 +19,25 @@
         {% endfor %}
       </select>
     </label>
+    <label>Document
+      <select name="document">
+        <option value="" {% if composed %}selected{% endif %}>Composed instructions</option>
+        {% for row in choices %}
+          <option value="{{ row.path }}" {% if not composed and original and row.path == original.path %}selected{% endif %}>{{ row.kind }} · {{ row.id }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if composed %}
     <label>Backend
       <select name="backend">
         <option value="db" {% if backend == "db" %}selected{% endif %}>DB</option>
         <option value="markdown" {% if backend == "markdown" %}selected{% endif %}>Markdown</option>
       </select>
     </label>
-    <label>Document
-      <select name="document">
-        <option value="" {% if not original %}selected{% endif %}>Composed instructions only</option>
-        {% for row in documents[backend] %}
-          <option value="{{ row.id }}" data-path="{{ row.path }}" {% if original and row.id == original.id %}selected{% endif %}>{{ row.kind }} · {{ row.id }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Revision
+    {% else %}
+    <input type="hidden" name="backend" value="{{ backend }}">
+    {% endif %}
+    <label class="revision-selector">Revision
       <select name="revision">
         <option value="branch" {% if revision == "branch" %}selected{% endif %}>Workspace branch</option>
         <option value="base" {% if revision == "base" %}selected{% endif %}>Base snapshot (read-only)</option>
@@ -49,60 +54,70 @@
     <p class="notice">Draft validation failed: unresolved operations
       {{ validation_errors[backend]|join(", ") }}. This draft is not ready to publish.</p>
   {% endif %}
-  {% if original %}
-    <section class="source-editor" {% if init %}data-editor-init='{{ init|tojson }}'{% endif %}>
-      <h3>Owning document: <code>{{ original.id }}</code> ({{ original.kind }})</h3>
+  {% macro editor() %}
+    <section class="source-editor" id="section-editor" {% if init %}data-editor-init='{{ init|tojson }}'{% endif %}>
+      <h3>{% if region %}Edit section: <code>{{ region }}</code>{% else %}Owning document: <code>{{ original.id }}</code> ({{ original.kind }}){% endif %}</h3>
       <p><code>{{ original.path }}</code></p>
-      {% if span %}<p class="subtle">Opened from the <code>{{ span }}</code> reference; the editor
-        holds the complete owning document, and saving rewrites that whole file.</p>{% endif %}
       {% if applicability|length == 2 %}
         <p class="notice">Shared document: saving changes both Markdown and DB delivery.</p>
       {% else %}
         <p class="notice quiet">This document is delivered to {{ applicability|join(", ") }} only.</p>
       {% endif %}
+      {% if region %}
+      <p class="subtle">Only this section will change, wherever it is referenced.</p>
+      {% else %}
       <p class="subtle">Full-file impact — saving this document changes
         {{ dependents|length }} delivered procedure(s): {{ dependents|join(", ") }}.
         Other regions of this file travel with it.</p>
+      {% endif %}
       {% if init %}
-        <label for="source-draft">Complete Markdown source</label>
+        <label for="source-draft">{{ 'Section text' if region else 'Complete Markdown source' }}</label>
         <textarea id="source-draft" rows="26" spellcheck="false">{{ original_text }}</textarea>
         <div class="editor-actions">
-          <button class="button" data-source-action="preview">Preview both backends</button>
-          <button class="button" data-source-action="save" disabled>Save document to draft PR</button>
+          <button class="button" data-source-action="save" disabled>Save {{ 'section' if region else 'document' }} to draft PR</button>
           <span data-source-dirty class="subtle">Saved baseline</span>
         </div>
         <div data-workspace="{{ workspace.id }}">
           <button class="button" data-workspace-action="retry-pr" {% if not workspace.pending_pr or workspace.pending_action %}hidden{% endif %}>Retry PR only</button>
-          <button class="button" data-workspace-action="reconcile" {% if not workspace.pending_action %}hidden{% endif %}>Reconcile save</button>
-          <a data-pr-link {% if workspace.pull_url|github_url %}href="{{ workspace.pull_url|github_url }}"{% else %}hidden{% endif %} target="_blank" rel="noopener noreferrer">Open draft PR</a>
+          <button class="button" data-workspace-action="reconcile" {% if not workspace.pending_action %}hidden{% endif %}>Check save status</button>
+          <span data-reconcile-help {% if not workspace.pending_action %}hidden{% endif %}>Checks whether GitHub created the branch or saved the commit. It won't resend your edit.</span>
           <p data-status role="status" aria-live="polite"></p>
         </div>
-        <p><a href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ original.id|urlencode }}&amp;document_path={{ original.path|urlencode }}" target="_blank" rel="noopener noreferrer">Open the latest document in a new tab; keep this draft here</a></p>
-        <section data-source-preview hidden>
-          <h4>Whole-document changes</h4><pre class="editor-preview" data-source-diff></pre>
-          <p class="subtle" data-preview-impact></p>
-          <h4>DB preview</h4><pre class="editor-preview" data-preview-db></pre>
-          <h4>Markdown preview</h4><pre class="editor-preview" data-preview-markdown></pre>
-        </section>
+        <p><a href="?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ original.path|urlencode }}{% if region %}&amp;region={{ region|urlencode }}&amp;composed={{ 1 if composed else 0 }}#section-editor{% endif %}" target="_blank" rel="noopener noreferrer">Open the latest source in a new tab; keep this draft here</a></p>
       {% else %}
         <p class="notice quiet">The base snapshot is read-only. Choose the workspace branch to edit.</p>
         <pre class="editor-preview">{{ original_text }}</pre>
       {% endif %}
     </section>
+  {% endmacro %}
+  {% if not composed and original.kind != "backend" %}
+    {{ editor() }}
   {% else %}
-    <h3>Composed instructions · {{ backend }}</h3>
-    {% for piece in rendered[backend].spans %}
+    {% if composed %}
+      <h3>Composed instructions · {{ backend }}</h3>
+    {% else %}
+      <h3>{{ original.id }} sections used by {{ procedure }}</h3>
+      {% if revision == 'base' %}<p>The base snapshot is read-only.</p>{% endif %}
+    {% endif %}
+    {% set shown = namespace(targets=[], editing=false) %}
+    {% for piece in rendered[backend].spans if composed or (piece.path == original.path and piece.target not in shown.targets) %}
+      {% set shown.targets = shown.targets + [piece.target] %}
+      {% if region and piece.target == region and piece.path == original.path and not shown.editing %}
+      {% set shown.editing = true %}
+      {{ editor() }}
+      {% else %}
       <section class="source-section">
         <div class="source-provenance">
           <code>{{ piece.id or piece.kind }}</code> · <code>{{ piece.path }}</code>
           {% if piece.backend_applicability|length == 2 %}<span class="badge">Shared</span>{% endif %}
           {% if piece.target %}<span class="subtle">region {{ piece.target }}</span>{% endif %}
           {% if revision == "branch" %}
-            <a class="button" href="/procedures/{{ workspace.id }}?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ piece.document_id|urlencode }}&amp;document_path={{ piece.path|urlencode }}{% if piece.id %}&amp;span={{ piece.id|urlencode }}{% endif %}">Edit document</a>
+            <a class="button" href="?procedure={{ procedure|urlencode }}&amp;backend={{ backend }}&amp;document={{ piece.path|urlencode }}{% if piece.target %}&amp;region={{ piece.target|urlencode }}&amp;composed={{ 1 if composed else 0 }}#section-editor{% endif %}">{{ 'Edit section' if piece.target else 'Edit document' }}</a>
           {% endif %}
         </div>
         <pre class="editor-preview">{{ piece.text }}</pre>
       </section>
+      {% endif %}
     {% endfor %}
   {% endif %}
 {% endblock %}

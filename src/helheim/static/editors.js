@@ -106,6 +106,16 @@
     output.className = bad ? "errors" : "notice quiet";
   }
 
+  function diagnostic(value) {
+    if (!value) return "";
+    const stage = { create_branch: "Creating branch", commit: "Saving commit",
+      pull: "Creating or checking PR" }[value.stage];
+    const status = value.upstream_status == null ? "" : "\nGitHub HTTP status: " + value.upstream_status;
+    const detail = value.details ? "\n" + value.details :
+      (value.upstream_status == null && !stage ? "" : "\nGitHub provided no reason.");
+    return (stage ? "\nOperation: " + stage : "") + status + detail;
+  }
+
   async function post(url, body) {
     let response;
     try {
@@ -116,7 +126,7 @@
         body: JSON.stringify(body || {}),
       });
     } catch (_) {
-      const error = new Error("Connection lost; outcome unconfirmed. Keep this draft.");
+      const error = new Error("Connection lost; outcome unconfirmed.");
       error.uncertain = true;
       throw error;
     }
@@ -124,35 +134,45 @@
     try {
       result = await response.json();
     } catch (_) {
-      const error = new Error("Response unreadable; outcome unconfirmed. Keep this draft.");
+      const error = new Error("Response unreadable; outcome unconfirmed.");
+      error.httpStatus = response.status;
       error.uncertain = true;
       throw error;
     }
     if (!result || typeof result !== "object") {
       const error = new Error("Response shape is unsupported; outcome unconfirmed.");
+      error.httpStatus = response.status;
       error.uncertain = true;
       throw error;
     }
     if (!response.ok) {
       let message = result.error || result.detail || "Request did not complete.";
       if (typeof message !== "string") message = JSON.stringify(message);
-      const error = new Error(message.slice(0, 1000));
+      const error = new Error(message + diagnostic(result.diagnostic));
+      error.httpStatus = response.status;
       error.uncertain = Boolean(result.uncertain);
       throw error;
     }
     return result;
   }
 
-  async function pending(root, task) {
+  async function pending(root, task, action) {
     if (root.dataset.busy === "true" || root.dataset.closed === "true") return;
     root.dataset.busy = "true";
     const buttons = Array.from(root.querySelectorAll("button"));
     buttons.forEach((button) => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
-    report(root, "Request in progress; drafts remain in place.", false);
+    report(root, action === "delete" ? "Deleting workspace…" : "Request in progress; drafts remain in place.", false);
     try {
       await task();
     } catch (error) {
-      report(root, error.message + " Drafts have not been replaced.", true);
+      if (action === "delete") {
+        const status = error.httpStatus ? " (HTTP " + error.httpStatus + ")" : "";
+        const unknown = error.uncertain || error.httpStatus >= 500;
+        report(root, (unknown ? "Workspace deletion not confirmed" : "Delete workspace failed") +
+          status + ": " + error.message + (unknown ? "\nRefresh the workspace list to check." : ""), true);
+      } else {
+        report(root, error.message + " Drafts have not been replaced.", true);
+      }
     } finally {
       delete root.dataset.busy;
       buttons.forEach((button) => {
@@ -171,13 +191,14 @@
 
   function workspaceResult(root, result) {
     const state = result.workspace;
-    const link = root.querySelector("[data-pr-link]");
-    if (link && state.pull_url) {
+    const link = root.querySelector("[data-pr-link]") || document.querySelector("[data-pr-link]");
+    if (link && state.pull_url && state.pull_number) {
       try {
         const address = new URL(state.pull_url);
         if (address.protocol === "https:" && address.hostname === "github.com" &&
             !address.username && !address.password) {
           link.href = address.href;
+          link.textContent = "PR #" + state.pull_number;
           link.hidden = false;
         }
       } catch (_) { /* An invalid link stays unclickable. */ }
@@ -186,20 +207,39 @@
     const reconcile = root.querySelector('[data-workspace-action="reconcile"]');
     if (retry) retry.hidden = !state.pending_pr || Boolean(state.pending_action);
     if (reconcile) reconcile.hidden = !state.pending_action;
+    const help = root.querySelector("[data-reconcile-help]");
+    if (help) help.hidden = !state.pending_action;
     if (sourceState) {
       sourceState.pending = Boolean(state.pending_action || state.pending_pr);
     }
+    if (state.version !== undefined) root.dataset.version = String(state.version);
     return result.status === "saved_pr_pending"
-      ? "Source saved to the branch. Draft PR not confirmed; retry PR only. " + (result.error || "")
+      ? "Source saved to the branch. Draft PR not confirmed; retry PR only. " +
+        (result.error || "") + diagnostic(result.diagnostic)
       : "Source saved to the editing branch and draft PR. Not merged or deployed.";
   }
 
   document.querySelectorAll("[data-workspace-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const root = button.closest("[data-workspace]");
+      const action = button.dataset.workspaceAction;
+      if (root.dataset.busy === "true") return;
+      if (action === "delete" && !window.confirm(
+        "Delete this workspace from Helheim? Its GitHub branch, commits and PR are kept."
+      )) return;
       pending(root, async () => {
-        const action = button.dataset.workspaceAction;
-        const result = await post("/procedures/" + encodeURIComponent(root.dataset.workspace) + "/" + action);
+        const result = await post("/procedures/" + encodeURIComponent(root.dataset.workspace) + "/" + action,
+          action === "delete" ? { version: Number(root.dataset.version) } : undefined);
+        if (action === "delete") {
+          if (result.deleted !== true) {
+            const error = new Error("The server did not confirm deletion.");
+            error.uncertain = true;
+            throw error;
+          }
+          root.dataset.closed = "true";
+          root.remove();
+          return;
+        }
         if (action === "reconcile") {
           if (sourceState) sourceState.reloadRequired = true;
           workspaceResult(root, { workspace: result.workspace });
@@ -207,11 +247,12 @@
         } else {
           workspaceResult(root, result);
           report(root, result.error
-            ? "Source remains saved; draft PR is still not confirmed. " + result.error
+            ? "Source remains saved; draft PR is still not confirmed. " + result.error +
+              diagnostic(result.diagnostic)
             : "Draft PR confirmed; the previously saved source commit was not changed.",
           Boolean(result.error));
         }
-      });
+      }, action);
     });
   });
 
@@ -272,40 +313,19 @@
           !dirty() || state.pending || state.reloadRequired || root.dataset.busy === "true";
       };
 
-      function impact(dependents) {
-        const list = Array.isArray(dependents) ? dependents : [];
-        const line = document.querySelector("[data-preview-impact]");
-        if (line) {
-          line.textContent = "Full-file impact: saving this document changes " +
-            list.length + " delivered procedure(s)" +
-            (list.length ? ": " + list.join(", ") : ".") +
-            " Other regions of the same file travel with it.";
-        }
-      }
-
       textarea.addEventListener("input", refresh);
       root.querySelectorAll("[data-source-action]").forEach((button) => {
         button.addEventListener("click", () => pending(root, async () => {
           const action = button.dataset.sourceAction;
+          const label = button.textContent;
+          button.innerHTML = '<span class="spinner" aria-hidden="true"></span>Saving…';
           const submitted = newlineDraft(state.original, textarea.value);
           try {
             const result = await post("/procedures/" + encodeURIComponent(state.id) + "/" + action, {
               procedure: state.procedure, backend: state.backend,
-              document: state.document_id, draft: submitted,
+              document: state.document_id, region: state.region, draft: submitted,
               expected_head: state.head, expected_document_hash: state.document_hash,
             });
-            if (action === "preview") {
-              if (typeof result.rendered?.db !== "string" ||
-                  typeof result.rendered?.markdown !== "string") {
-                throw new Error("Preview response is incomplete; nothing was saved.");
-              }
-              root.querySelector("[data-source-preview]").hidden = false;
-              root.querySelector("[data-source-diff]").textContent = result.diff;
-              impact(result.dependents);
-              root.querySelector("[data-preview-db]").textContent = result.rendered.db;
-              root.querySelector("[data-preview-markdown]").textContent = result.rendered.markdown;
-              report(actions, "Preview only; nothing was saved." + validation(result.validation_errors), false);
-            } else {
               if (!["saved", "saved_pr_pending"].includes(result.status) ||
                   typeof result.head !== "string" || !result.document ||
                   typeof result.document.sha256 !== "string" ||
@@ -320,13 +340,16 @@
               document.getElementById("source-head").textContent = result.head;
               report(actions, workspaceResult(actions, result) + validation(result.validation_errors),
                 Boolean(result.error));
-            }
           } catch (error) {
             if (action === "save" && error.uncertain) {
               state.reloadRequired = true;
               actions.querySelector('[data-workspace-action="reconcile"]').hidden = false;
+              actions.querySelector("[data-reconcile-help]").hidden = false;
             }
-            report(actions, error.message + " This draft is retained.", true);
+            report(actions, "Save " + (error.uncertain ? "outcome unknown. " : "refused. ") +
+              error.message + "\nThis draft is retained.", true);
+          } finally {
+            button.textContent = label;
           }
         }));
       });
@@ -423,8 +446,6 @@
     selectors.addEventListener("submit", (event) => {
       event.preventDefault();
       const query = new URLSearchParams(new FormData(selectors));
-      const documentPath = selectors.elements.namedItem("document").selectedOptions[0]?.dataset.path;
-      if (documentPath) query.set("document_path", documentPath);
       // The controls must describe the displayed source until another page loads,
       // including when a user cancels or returns via browser history.
       selectors.reset();
