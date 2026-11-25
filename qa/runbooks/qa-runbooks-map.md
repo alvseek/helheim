@@ -1,6 +1,6 @@
 # QA Runbooks Map — Helheim
 
-Last scan: 2026-11-19; whole-project authored-file scan.
+Last scan: 2026-11-25; whole-project authored-file scan.
 
 **Category status**: exists-documented  
 **Owner**: build-qa-bench

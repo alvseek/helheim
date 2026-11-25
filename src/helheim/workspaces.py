@@ -218,7 +218,7 @@ class Workspaces:
         return rendered, errors
 
     def preview(self, identity, procedure, backend, document_id=None, draft=None,
-                revision="branch", *, allow_missing_document=False):
+                revision="branch", *, allow_missing_document=False, expected_document_path=None):
         state, head, source, catalog = self.snapshot(identity, revision)
         if not catalog.procedures:
             raise GitError("this revision contains no procedures")
@@ -231,6 +231,10 @@ class Workspaces:
                 catalog, procedure, backend, document_id,
                 allow_missing=allow_missing_document and draft is None,
             )
+            # A backend file and an authored document can share an ID in different views.
+            if (original and expected_document_path is not None
+                    and original.path != expected_document_path):
+                original = None
         if draft is not None:
             if original is None:
                 raise GitError("preview needs a declared document identity")

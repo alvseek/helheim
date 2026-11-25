@@ -10,10 +10,12 @@ from .config import load_settings
 def main() -> None:
     settings = load_settings()
     uvicorn.run(
-        "helheim.app:app",
+        "helheim.app:create_app",
+        factory=True,
         host=settings.host,
         port=settings.port,
         log_level="info",
+        access_log=settings.mode != "hosted",
     )
 
 

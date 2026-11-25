@@ -28,8 +28,9 @@ def csrf_field_name(fields):
 
 class EditorSecurity:
     def __init__(self, settings: Settings):
+        self.hosted_origin = settings.hosted_origin if settings.mode == "hosted" else ""
         host = settings.host
-        if host != "localhost":
+        if not self.hosted_origin and host != "localhost":
             try:
                 safe = ipaddress.ip_address(host).is_loopback
             except ValueError:
@@ -41,15 +42,12 @@ class EditorSecurity:
         self.secret = secrets.token_bytes(32)
 
     def prepare(self, request: Request):
-        try:
-            authority = urlsplit("http://" + request.headers.get("host", ""))
-            host = authority.hostname
-            port = authority.port or 80
-        except ValueError as exc:
-            raise HTTPException(403, "invalid local Host") from exc
-        if (host not in self.hosts or port != self.port or authority.username
-                or authority.password or authority.path or authority.query or authority.fragment):
-            raise HTTPException(403, "Host must name this loopback Helheim instance")
+        if self.hosted_origin:
+            expected_host = urlsplit(self.hosted_origin).netloc.lower()
+            if request.headers.get("host", "").lower() != expected_host:
+                raise HTTPException(403, "Host must name the hosted Helheim origin")
+        else:
+            self._prepare_local_host(request)
         if (request.method in ("GET", "HEAD")
                 and request.url.path.startswith(("/memory", "/procedures"))
                 and request.headers.get("sec-fetch-site") == "cross-site"):
@@ -63,10 +61,28 @@ class EditorSecurity:
             self.secret, owner.encode("ascii"), hashlib.sha256
         ).hexdigest()
 
+    def _prepare_local_host(self, request: Request):
+        try:
+            authority = urlsplit("http://" + request.headers.get("host", ""))
+            host = authority.hostname
+            port = authority.port or 80
+        except ValueError as exc:
+            raise HTTPException(403, "invalid local Host") from exc
+        if (host not in self.hosts or port != self.port or authority.username
+                or authority.password or authority.path or authority.query or authority.fragment):
+            raise HTTPException(403, "Host must name this loopback Helheim instance")
+
     async def require_write(self, request: Request):
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return
-        expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
+        if (self.hosted_origin and request.method == "POST"
+                and request.url.path in ("/login/callback", "/auth/mcp/callback")):
+            # These exact endpoints validate issuer Origin, state and response shape;
+            # they only stage a handoff and never authorize or exchange a code.
+            return
+        expected_origin = self.hosted_origin or (
+            f"{request.url.scheme}://{request.headers.get('host', '')}"
+        )
         if request.headers.get("origin") != expected_origin:
             raise HTTPException(403, "write requires the same local Origin")
         if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):

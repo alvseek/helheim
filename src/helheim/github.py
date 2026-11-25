@@ -1,19 +1,30 @@
-"""GitHub data access through the existing gh login; no token is extracted or stored."""
+"""GitHub data access through gh, with explicit hosted credential isolation."""
 
 from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from procedure_composer import MemorySource
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_TOKEN = re.compile(r"[A-Za-z0-9_]+\Z")
+_WORKSPACE_BRANCH = re.compile(r"helheim/[0-9a-f]{32}\Z")
+_COMMIT_MUTATION = """mutation($input:CreateCommitOnBranchInput!){
+          createCommitOnBranch(input:$input){commit{oid url}}
+        }"""
+_SAFE_ENV = {
+    "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+    "TEMP", "TMP", "TMPDIR", "LANG",
+}
 
 
 class GitError(RuntimeError):
@@ -65,24 +76,42 @@ def oid(value: Any) -> str:
 class GitHub:
     """Replaceable adapter. runner is injected for tests; production never uses a shell."""
 
-    def __init__(self, repository: Repository, *, runner=subprocess.run):
+    def __init__(self, repository: Repository, *, runner=None, credential_source=None):
         self.repository = repository
-        self.runner = runner
+        self.runner = runner or subprocess.run
+        self.credential_source = credential_source
         self._blobs: dict[str, bytes] = {}
         self._snapshots: dict[str, MemorySource] = {}
 
     def request(self, endpoint: str, *, method="GET", data=None, missing=False):
+        if self.credential_source is not None:
+            self._validate_hosted_request(endpoint, method, data)
         args = ["gh", "api", "--hostname", "github.com", "--include", "--method", method, endpoint]
         payload = None
         if data is not None:
             args.extend(["--input", "-"])
             payload = json.dumps(data, ensure_ascii=False)
         try:
-            result = self.runner(
-                args, input=payload, text=True, encoding="utf-8",
-                capture_output=True, timeout=30, check=False,
-            )
+            kwargs = dict(input=payload, text=True, encoding="utf-8",
+                          capture_output=True, timeout=30, check=False)
+            if self.credential_source is None:
+                result = self.runner(args, **kwargs)
+            else:
+                try:
+                    token = self.credential_source()
+                except Exception:
+                    raise GitError("hosted GitHub credential is unavailable") from None
+                if not isinstance(token, str) or not _TOKEN.fullmatch(token):
+                    raise GitError("hosted GitHub credential is missing or invalid")
+                env = {key: value for key, value in os.environ.items()
+                       if key.upper() in _SAFE_ENV or key.upper().startswith("LC_")}
+                with tempfile.TemporaryDirectory(prefix="helheim-gh-") as isolated:
+                    env.update(GH_TOKEN=token, GH_CONFIG_DIR=isolated,
+                               GH_PROMPT_DISABLED="1", HOME=isolated, USERPROFILE=isolated)
+                    result = self.runner(args, env=env, **kwargs)
         except FileNotFoundError as exc:
+            if self.credential_source is not None:
+                raise GitError("gh is unavailable for hosted procedure editing") from exc
             raise GitError(
                 "gh is not installed; install it and sign in with gh auth login"
             ) from exc
@@ -122,6 +151,55 @@ class GitHub:
                     "GitHub write returned an unreadable result; reconcile before retrying"
                 ) from exc
             raise GitError("GitHub returned an unreadable response") from exc
+
+    def _validate_hosted_request(self, endpoint, method, data):
+        if endpoint == "graphql":
+            try:
+                change = data["variables"]["input"]
+                branch = change["branch"]
+                changes = change["fileChanges"]
+                additions = changes["additions"]
+                path = additions[0]["path"]
+                safe = (
+                    method == "POST" and data["query"] == _COMMIT_MUTATION
+                    and set(change) == {"branch", "expectedHeadOid", "message", "fileChanges"}
+                    and set(changes) == {"additions"} and len(additions) == 1
+                    and branch["repositoryNameWithOwner"].lower()
+                    == f"{self.repository.owner}/{self.repository.name}".lower()
+                    and bool(_WORKSPACE_BRANCH.fullmatch(branch["branchName"]))
+                    and bool(_OID.fullmatch(change["expectedHeadOid"]))
+                    and path.startswith(self.repository.path("procedures") + "/")
+                    and path.endswith(".md") and "\\" not in path and ":" not in path
+                    and not any(part in ("", ".", "..") for part in path.split("/"))
+                )
+            except (AttributeError, IndexError, KeyError, TypeError):
+                safe = False
+            if not safe:
+                raise GitError("hosted GitHub request is outside the approved repository")
+            return
+        if not isinstance(endpoint, str):
+            raise GitError("hosted GitHub request is outside the approved repository")
+        path = endpoint.split("?", 1)[0]
+        while unquote(path) != path:
+            path = unquote(path)
+        if (not path.startswith(self.repository.api + "/") or "\\" in path or "#" in endpoint
+                or any(part in (".", "..") for part in path.split("/"))):
+            raise GitError("hosted GitHub request is outside the approved repository")
+        if method == "GET":
+            return
+        if (method == "POST" and isinstance(data, dict)
+                and endpoint == self.repository.api + "/git/refs"
+                and isinstance(data.get("ref"), str)
+                and data["ref"].startswith("refs/heads/")
+                and _WORKSPACE_BRANCH.fullmatch(data["ref"].removeprefix("refs/heads/"))
+                and isinstance(data.get("sha"), str) and _OID.fullmatch(data["sha"])):
+            return
+        if (method == "POST" and isinstance(data, dict)
+                and endpoint == self.repository.api + "/pulls"
+                and isinstance(data.get("head"), str) and _WORKSPACE_BRANCH.fullmatch(data["head"])
+                and data.get("base") == self.repository.base_ref and data.get("draft") is True):
+            return
+        raise GitError("hosted GitHub write is outside the draft workspace")
 
     def resolve(self, reference: str) -> str:
         row = self.request(f"{self.repository.api}/commits/{quote(reference, safe='')}")
@@ -196,11 +274,8 @@ class GitHub:
             or any(part in ("", ".", "..") for part in path.split("/"))
         ):
             raise GitError("write target is outside the configured procedure document tree")
-        mutation = """mutation($input:CreateCommitOnBranchInput!){
-          createCommitOnBranch(input:$input){commit{oid url}}
-        }"""
         payload = self.request("graphql", method="POST", data={
-            "query": mutation,
+            "query": _COMMIT_MUTATION,
             "variables": {"input": {
                 "branch": {"repositoryNameWithOwner":
                            f"{self.repository.owner}/{self.repository.name}", "branchName": branch},

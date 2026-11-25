@@ -216,15 +216,44 @@
   });
 
   const creator = document.querySelector("[data-new-workspace]");
-  if (creator) creator.addEventListener("submit", (event) => {
-    event.preventDefault();
-    pending(creator, async () => {
-      const result = await post("/procedures/workspaces", {
-        repository: creator.querySelector("select").value,
-      });
-      window.location.assign(result.redirect);
+  if (creator) {
+    const button = creator.querySelector('button[type="submit"]');
+    const repository = creator.querySelector("select");
+    const label = button.textContent;
+    let opening = null;
+    function resetOpening() {
+      opening = null;
+      button.textContent = label;
+      button.disabled = repository.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+    creator.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (opening) return;
+      const attempt = opening = {};
+      button.textContent = "Opening workspace…";
+      button.disabled = repository.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      report(creator, "Opening workspace…", false);
+      try {
+        const result = await post("/procedures/workspaces", { repository: repository.value });
+        if (opening !== attempt) return;
+        if (typeof result.redirect !== "string" || !/^\/procedures\/[0-9a-f]{32}$/.test(result.redirect)) {
+          throw new Error("Workspace creation could not be confirmed. Check the workspace list.");
+        }
+        window.location.assign(result.redirect);
+      } catch (error) {
+        if (opening !== attempt) return;
+        resetOpening();
+        report(creator, error.message, true);
+      }
     });
-  });
+    window.addEventListener("pageshow", (event) => {
+      if (!event.persisted) return;
+      resetOpening();
+      report(creator, "", false);
+    });
+  }
 
   const root = document.querySelector("[data-editor-init]");
   if (root) {
@@ -242,46 +271,6 @@
         root.querySelector('[data-source-action="save"]').disabled =
           !dirty() || state.pending || state.reloadRequired || root.dataset.busy === "true";
       };
-
-      function composed(spans, label) {
-        const container = document.querySelector("[data-source-composed]");
-        container.replaceChildren();
-        spans.forEach((piece) => {
-          const block = document.createElement("section");
-          block.className = "source-section";
-          const heading = document.createElement("div");
-          heading.className = "source-provenance";
-          const name = document.createElement("code");
-          name.textContent = (piece.id || piece.kind) + " · " + piece.path;
-          heading.append(name);
-          if (piece.backend_applicability.length === 2) {
-            const shared = document.createElement("span");
-            shared.className = "badge";
-            shared.textContent = "Shared";
-            heading.append(shared);
-          }
-          if (piece.target) {
-            const region = document.createElement("span");
-            region.className = "subtle";
-            region.textContent = "region " + piece.target;
-            heading.append(region);
-          }
-          const edit = document.createElement("a");
-          edit.className = "button";
-          edit.textContent = "Edit document";
-          edit.href = "/procedures/" + encodeURIComponent(state.id) + "?procedure=" +
-            encodeURIComponent(state.procedure) + "&backend=" + state.backend +
-            "&document=" + encodeURIComponent(piece.document_id) +
-            (piece.id ? "&span=" + encodeURIComponent(piece.id) : "");
-          heading.append(edit);
-          const content = document.createElement("pre");
-          content.className = "editor-preview";
-          content.textContent = piece.text;
-          block.append(heading, content);
-          container.append(block);
-        });
-        document.querySelector("[data-composed-label]").textContent = label;
-      }
 
       function impact(dependents) {
         const list = Array.isArray(dependents) ? dependents : [];
@@ -306,7 +295,8 @@
               expected_head: state.head, expected_document_hash: state.document_hash,
             });
             if (action === "preview") {
-              if (!result.rendered || !result.spans || !result.spans[state.backend]) {
+              if (typeof result.rendered?.db !== "string" ||
+                  typeof result.rendered?.markdown !== "string") {
                 throw new Error("Preview response is incomplete; nothing was saved.");
               }
               root.querySelector("[data-source-preview]").hidden = false;
@@ -314,13 +304,12 @@
               impact(result.dependents);
               root.querySelector("[data-preview-db]").textContent = result.rendered.db;
               root.querySelector("[data-preview-markdown]").textContent = result.rendered.markdown;
-              composed(result.spans[state.backend], "Unsaved combined preview · " + state.backend);
               report(actions, "Preview only; nothing was saved." + validation(result.validation_errors), false);
             } else {
               if (!["saved", "saved_pr_pending"].includes(result.status) ||
                   typeof result.head !== "string" || !result.document ||
                   typeof result.document.sha256 !== "string" ||
-                  !result.workspace || !result.spans || !result.spans[state.backend]) {
+                  !result.workspace) {
                 const error = new Error("Save result is incomplete; outcome unconfirmed.");
                 error.uncertain = true;
                 throw error;
@@ -329,7 +318,6 @@
               state.head = result.head;
               state.document_hash = result.document.sha256;
               document.getElementById("source-head").textContent = result.head;
-              composed(result.spans[state.backend], "Saved branch composition · " + state.backend + " (not deployed)");
               report(actions, workspaceResult(actions, result) + validation(result.validation_errors),
                 Boolean(result.error));
             }
@@ -424,7 +412,42 @@
     refresh();
   }
 
+  let selectorConfirmed = false;
+  const selectors = document.querySelector("[data-procedure-selectors]");
+  if (selectors) {
+    let navigating = false;
+    const loading = document.querySelector("[data-view-loading]");
+    selectors.addEventListener("change", (event) => {
+      if (event.target.matches("select")) selectors.requestSubmit();
+    });
+    selectors.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const query = new URLSearchParams(new FormData(selectors));
+      const documentPath = selectors.elements.namedItem("document").selectedOptions[0]?.dataset.path;
+      if (documentPath) query.set("document_path", documentPath);
+      // The controls must describe the displayed source until another page loads,
+      // including when a user cancels or returns via browser history.
+      selectors.reset();
+      if (navigating) return;
+      const unsaved = dirty();
+      if (unsaved && !window.confirm("Change the procedure view and discard unsaved source?")) return;
+      navigating = true;
+      selectorConfirmed = unsaved;
+      loading.textContent = "Loading procedure view…";
+      window.location.assign(selectors.action + "?" + query);
+    });
+    window.addEventListener("pageshow", () => {
+      navigating = selectorConfirmed = false;
+      selectors.reset();
+      loading.textContent = "";
+    });
+  }
+
   window.addEventListener("beforeunload", (event) => {
+    if (selectorConfirmed) {
+      selectorConfirmed = false;
+      return;
+    }
     if (dirty()) { event.preventDefault(); event.returnValue = ""; }
   });
 })();

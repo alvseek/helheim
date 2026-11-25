@@ -5,7 +5,7 @@
   <p>Read composed instructions and edit the complete document that owns them. Save creates
     source commits and a draft pull request, never a merge or deployment.</p>
   {% if repositories %}
-    <form data-new-workspace class="form">
+    <form data-new-workspace class="form" autocomplete="off">
       <label for="repository">Configured source repository</label>
       <select id="repository" name="repository">
         {% for repository in repositories %}

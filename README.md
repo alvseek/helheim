@@ -23,10 +23,38 @@ uv sync --locked
 uv run helheim
 ```
 
-Open <http://127.0.0.1:8765>. Editing requires a loopback bind; public interfaces
-are refused. Browser writes require a matching Host, Origin and browser-bound
+Open <http://127.0.0.1:8765>. Desktop editing requires a loopback bind; public
+interfaces are refused in desktop mode. Browser writes require a matching Host, Origin and browser-bound
 CSRF token, including the inspector's Send form. Use the remote MCP/HTTP API,
 not Helheim's private UI routes, for non-browser integrations.
+
+### Hosted sign-in development
+
+Hosted mode is incomplete and is not yet a deployment recipe. It is enabled
+explicitly with `HELHEIM_MODE=hosted` and requires `HELHEIM_HOSTED_ORIGIN`,
+`HELHEIM_HOSTED_ISSUER`, `HELHEIM_HOSTED_CLIENT_ID`,
+`HELHEIM_HOSTED_CLIENT_SECRET`, and `HELHEIM_HOSTED_OWNER_SUB`. The origin and
+issuer must use HTTPS. The login callback is the origin followed by
+`/login/callback`. Missing or invalid settings fail startup. Hosted MCP Connect
+uses the same hosted web client but a separate `/auth/mcp/callback` and a
+separate resource-bound authorization for each server. The consenting account
+must match the dashboard owner. Both hosted flows request `form_post`; a
+short-lived, one-time server-side handoff lets the original browser complete
+the flow without placing the response in a redirect URL. A provider ignoring
+that response mode can still expose its query to an upstream proxy before the
+app rejects it. Real issuer behavior and the hosted deployment remain
+unverified; do not expose this development state to the internet.
+
+Hosted procedure editing permits zero or one server-configured repository; its
+selection is not a browser-controlled setting. The deployment operator must pin
+the intended repository in private deployment configuration and scope its
+dedicated credential to that repository. A separate disposable deployment can
+use the same configuration mechanism with its own repository and credential.
+The credential is supplied by the server through
+`HELHEIM_HOSTED_GITHUB_TOKEN`; an absent or invalid value disables GitHub
+operations rather than falling back to a local `gh` login. The credential is
+not a dashboard login or MCP token. A real, scoped disposable-repository proof
+and production provisioning remain separate gates.
 
 ## Connect a memory server
 

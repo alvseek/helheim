@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from . import mcp_client
 from .auth import AuthError
 from .config import Settings
-from .github import GitConflict, GitError, GitUncertain
+from .github import GitConflict, GitError, GitHub, GitUncertain
 from .memory_editor import MemoryEditError, MemoryEditor
 from .workspaces import Workspaces, WorkspaceStore
 
@@ -67,8 +67,13 @@ def github_url(value):
 
 
 def register_editors(app: FastAPI, settings: Settings, templates):
+    if settings.mode == "hosted":
+        def adapter(repository):
+            return GitHub(repository, credential_source=lambda: settings.hosted_github_token)
+    else:
+        adapter = GitHub
     app.state.workspaces = Workspaces(WorkspaceStore(settings.db_path),
-                                      settings.procedure_repositories)
+                                      settings.procedure_repositories, adapter=adapter)
 
     def server(name):
         found = settings.server(name)
@@ -121,11 +126,11 @@ def register_editors(app: FastAPI, settings: Settings, templates):
         identity: str, request: Request, procedure: str | None = None,
         backend: Literal["markdown", "db"] = "db",
         revision: Literal["branch", "base"] = "branch",
-        document: str | None = None, span: str | None = None,
+        document: str | None = None, span: str | None = None, document_path: str | None = None,
     ):
         view = await run_in_threadpool(
             app.state.workspaces.preview, identity, procedure, backend, document or None,
-            revision=revision, allow_missing_document=True,
+            revision=revision, allow_missing_document=True, expected_document_path=document_path,
         )
         original = view["original"]
         init = None

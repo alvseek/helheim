@@ -15,6 +15,9 @@ from urllib.request import Request, urlopen
 
 from qa import bench
 
+LOG_UNLINK_ATTEMPTS = 50
+LOG_UNLINK_DELAY = 0.1
+
 
 class Peer:
     def __init__(self, project, role):
@@ -27,11 +30,11 @@ class Peer:
         try:
             self.owner = bench.reset(self.project, self.root)
             bench.inject(self.root)
-        except BaseException:
+        except BaseException as setup_error:
             try:
                 self.close()
-            except BaseException:
-                pass
+            except BaseException as cleanup_error:
+                raise cleanup_error from setup_error
             raise
 
     def start(self):
@@ -64,11 +67,11 @@ class Peer:
                     if time.monotonic() > deadline:
                         raise RuntimeError("QA peer did not become ready") from None
                     threading.Event().wait(0.05)
-        except BaseException:
+        except BaseException as startup_error:
             try:
                 self.close()
-            except BaseException:
-                pass
+            except BaseException as cleanup_error:
+                raise cleanup_error from startup_error
             raise
 
     def request(self, path, data=None, *, authenticated=True, timeout=20):
@@ -96,8 +99,25 @@ class Peer:
             if not stopped and process.poll() is None:
                 bench.stop_process(process)
         if process is not None:
-            assert process.poll() is not None
+            if process.poll() is None:
+                raise RuntimeError("Owned QA peer did not stop")
         if not self.root.exists():
             return
-        assert bench.owned(self.root, self.project)["run"] == self.owner["run"]
+        # Windows can report the inherited log handle still in use after the
+        # direct Popen has exited. Keep the owner marker intact while retrying
+        # only a sharing violation on this exact owned log.
+        log = self.root / "runtime" / "peer.log"
+        for attempt in range(LOG_UNLINK_ATTEMPTS):
+            if bench.owned(self.root, self.project)["run"] != self.owner["run"]:
+                raise ValueError("QA peer owner does not match")
+            try:
+                log.unlink(missing_ok=True)
+                break
+            except PermissionError as exc:
+                if (os.name != "nt" or getattr(exc, "winerror", None) != 32
+                        or attempt + 1 == LOG_UNLINK_ATTEMPTS):
+                    raise
+                threading.Event().wait(LOG_UNLINK_DELAY)
+        if bench.owned(self.root, self.project)["run"] != self.owner["run"]:
+            raise ValueError("QA peer owner does not match")
         shutil.rmtree(self.root)  # Exact generated, marker-verified disposable root.

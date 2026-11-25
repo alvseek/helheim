@@ -1,0 +1,16 @@
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!src/**
+**/__pycache__/
+**/*.pyc
+**/.env
+**/*.env
+**/*.pem
+**/*.key
+**/tokens.json
+**/hosted-mcp-tokens.json
+**/config.toml
