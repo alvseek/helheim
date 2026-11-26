@@ -74,7 +74,7 @@
       }
     }
   ],
-  "query": [
+  "list_memories": [
     {
       "uuid": "11111111111141118111111111111111",
       "agent_id": "meta",
@@ -92,7 +92,7 @@
     }
   ],
   "schemas": {
-    "get": {
+    "get_memory": {
       "additionalProperties": false,
       "properties": {
         "uuid": {
@@ -134,7 +134,7 @@
       ],
       "type": "object"
     },
-    "query": {
+    "list_memories": {
       "additionalProperties": false,
       "properties": {
         "agent_id": {
@@ -181,7 +181,7 @@
       },
       "type": "object"
     },
-    "edit": {
+    "edit_memory_body": {
       "additionalProperties": false,
       "properties": {
         "uuid": {
@@ -233,7 +233,7 @@
       ],
       "type": "object"
     },
-    "edit_metadata": {
+    "edit_memory_metadata": {
       "additionalProperties": false,
       "properties": {
         "uuid": {

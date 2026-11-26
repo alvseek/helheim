@@ -53,7 +53,7 @@ async def capture(base, target):
     assert hashlib.sha256(body.encode()).hexdigest() == HASH
     server = Server("capture", base + "/mcp", base + "/mcp")
     tools = await mcp_client.list_tools(server, TOKEN)
-    wire = await mcp_client.call_tool(server, TOKEN, "get", {
+    wire = await mcp_client.call_tool(server, TOKEN, "get_memory", {
         "uuid": UUID, "include_edit_context": True,
     })
     first = wire.payload
@@ -63,9 +63,10 @@ async def capture(base, target):
     metadata = [row for row in get("/api/query?agent_id=meta") if row["uuid"] == UUID]
     result = {"fidelity": "rung-1 captured synthetic real-Munnin output",
               "captured": datetime.now(UTC).isoformat(), "body": body, "pages": pages,
-              "query": metadata, "schemas": {
+              "list_memories": metadata, "schemas": {
                   tool.name: tool.input_schema for tool in tools
-                  if tool.name in ("get", "query", "edit", "edit_metadata")}}
+                  if tool.name in ("get_memory", "list_memories",
+                                   "edit_memory_body", "edit_memory_metadata")}}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes((json.dumps(result, indent=2, ensure_ascii=True) + "\n").encode())
     print(json.dumps({"captured_pages": len(pages), "body_sha256": HASH,

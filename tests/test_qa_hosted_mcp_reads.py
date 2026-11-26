@@ -62,7 +62,7 @@ def test_hosted_inspector_and_guarded_memory_reconstruct_captured_pages(rig):
     uuid = seed["pages"][0]["uuid"]
     listing = client.get("/s/paged")
     assert listing.status_code == 200
-    for name in ("query", "get", "edit", "edit_metadata"):
+    for name in ("list_memories", "get_memory", "edit_memory_body", "edit_memory_metadata"):
         assert f"/s/paged/t/{name}" in listing.text
     opened = client.get("/memory/paged/open", params={"uuid": uuid})
     assert opened.status_code == 200
@@ -77,8 +77,8 @@ def test_hosted_inspector_and_guarded_memory_reconstruct_captured_pages(rig):
     }
     state = peer.request("/__qa__/state")
     assert state["calls"] == [
-        {"tool": "get", "cursor": None},
-        {"tool": "get", "cursor": seed["pages"][0]["next_cursor"]},
+        {"tool": "get_memory", "cursor": None},
+        {"tool": "get_memory", "cursor": seed["pages"][0]["next_cursor"]},
     ]
     assert state["writes"] == 0
 
@@ -94,7 +94,7 @@ def test_hosted_guarded_open_refuses_a_mismatched_continuation(rig):
     assert not auth.settings.tokens_path.exists()
     assert not client.app.state.memory_editor.sessions
     state = peer.request("/__qa__/state")
-    assert [call["tool"] for call in state["calls"]] == ["get", "get"]
+    assert [call["tool"] for call in state["calls"]] == ["get_memory", "get_memory"]
     assert state["writes"] == 0
 
 

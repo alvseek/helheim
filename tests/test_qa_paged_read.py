@@ -84,10 +84,10 @@ async def test_fixture_serves_the_captured_pages_over_real_mcp(peer):
     server = Server("paged", peer.url + "/mcp", peer.url + "/mcp")
     token = peer.owner["nonce"]
     first = payload(await mcp_client.call_tool(
-        server, token, "get", {"uuid": UUID, "include_edit_context": True},
+        server, token, "get_memory", {"uuid": UUID, "include_edit_context": True},
     ))
     assert first == data["pages"][0]
-    second = payload(await mcp_client.call_tool(server, token, "get", {
+    second = payload(await mcp_client.call_tool(server, token, "get_memory", {
         "uuid": UUID,
         "cursor": data["pages"][0]["next_cursor"],
         "include_edit_context": True,
@@ -120,8 +120,8 @@ async def test_captured_pages_reconstruct_the_exact_original_body_in_source_orde
     state = observed(peer)
     assert state["mode"] == "valid" and state["writes"] == 0
     assert state["calls"] == [
-        {"tool": "get", "cursor": None},
-        {"tool": "get", "cursor": data["pages"][0]["next_cursor"]},
+        {"tool": "get_memory", "cursor": None},
+        {"tool": "get_memory", "cursor": data["pages"][0]["next_cursor"]},
     ]
 
 
@@ -134,7 +134,7 @@ async def test_corrupted_page_is_refused_before_a_writable_editor_or_write(peer,
     assert editor.sessions == {}
     state = observed(peer)
     assert state["mode"] == mode and state["writes"] == 0
-    assert {call["tool"] for call in state["calls"]} <= {"get", "query"}
+    assert {call["tool"] for call in state["calls"]} <= {"get_memory", "list_memories"}
 
 
 async def test_interrupted_transport_is_refused_before_a_writable_editor_or_write(peer):
@@ -145,7 +145,7 @@ async def test_interrupted_transport_is_refused_before_a_writable_editor_or_writ
     assert editor.sessions == {}
     state = observed(peer)
     assert state["mode"] == "interrupt" and state["writes"] == 0
-    assert {"tool": "get", "cursor": None} in state["calls"]
+    assert {"tool": "get_memory", "cursor": None} in state["calls"]
     assert any(call.get("fault") == "HTTP 503" for call in state["calls"])
 
 
@@ -169,7 +169,7 @@ async def test_change_between_pages_is_refused_after_resume(peer, mode, message)
     assert editor.sessions == {}
     state = observed(peer)
     assert state["mode"] == mode and state["writes"] == 0
-    assert [call["tool"] for call in state["calls"]] == ["get", "get"]
+    assert [call["tool"] for call in state["calls"]] == ["get_memory", "get_memory"]
 
 
 async def test_healthy_recovery_obtains_a_fresh_complete_baseline(peer):
@@ -187,7 +187,7 @@ async def test_healthy_recovery_obtains_a_fresh_complete_baseline(peer):
     assert list(editor.sessions) == [opened.id]
     state = observed(peer)
     assert state["calls"] == [
-        {"tool": "get", "cursor": None},
-        {"tool": "get", "cursor": data["pages"][0]["next_cursor"]},
+        {"tool": "get_memory", "cursor": None},
+        {"tool": "get_memory", "cursor": data["pages"][0]["next_cursor"]},
     ]
     assert state["writes"] == 0

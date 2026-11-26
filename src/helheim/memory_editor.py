@@ -29,9 +29,9 @@ def metadata(record):
 def supported(tools: list[ToolInfo]) -> bool:
     shapes = {tool.name: tool.input_schema.get("properties", {}) for tool in tools}
     return (
-        "include_edit_context" in shapes.get("get", {})
+        "include_edit_context" in shapes.get("get_memory", {})
         and all({"expected_revision", "expected_tenant"} <= set(shapes.get(name, {}))
-                for name in ("edit", "edit_metadata"))
+                for name in ("edit_memory_body", "edit_memory_metadata"))
     )
 
 
@@ -135,7 +135,7 @@ class MemoryEditor:
         return result
 
     async def browse(self, server, **filters):
-        rows = await self.call(server, "query", filters)
+        rows = await self.call(server, "list_memories", filters)
         if not isinstance(rows, list):
             raise MemoryEditError("server did not return a metadata listing")
         return rows
@@ -143,7 +143,7 @@ class MemoryEditor:
     async def open(self, owner: str, server: str, identity: str):
         if not supported(await self.list_tools(server)):
             raise MemoryEditError("server lacks guarded edit support; use the inspector read-only")
-        record = await self.call(server, "get", {
+        record = await self.call(server, "get_memory", {
             "uuid": identity, "include_edit_context": True,
         })
         if not isinstance(record, dict):
@@ -199,7 +199,7 @@ class MemoryEditor:
             if not isinstance(cursor, str) or cursor in cursors:
                 raise MemoryEditError("body pagination is incomplete; reload the record")
             cursors.add(cursor)
-            record = await self.call(server, "get", {
+            record = await self.call(server, "get_memory", {
                 "uuid": baseline["uuid"], "cursor": cursor, "include_edit_context": True,
             })
             if not isinstance(record, dict):
@@ -261,7 +261,7 @@ class MemoryEditor:
                 if draft == editing.body:
                     raise MemoryEditError("no body changes to save")
                 arguments.update(old_string=editing.body, new_string=draft)
-                result = await self.call(editing.server, "edit", arguments)
+                result = await self.call(editing.server, "edit_memory_body", arguments)
             elif action == "metadata":
                 if not isinstance(draft, dict) or set(draft) - set(EDITABLE):
                     raise MemoryEditError(
@@ -287,7 +287,7 @@ class MemoryEditor:
                 })
                 if clearing:
                     arguments["clearing"] = clearing
-                result = await self.call(editing.server, "edit_metadata", arguments)
+                result = await self.call(editing.server, "edit_memory_metadata", arguments)
             else:
                 raise MemoryEditError("unknown save area")
             if not isinstance(result, dict) or "content" in result or "full_content" in result:
