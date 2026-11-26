@@ -316,7 +316,7 @@ def test_memory_saves_are_guarded_and_not_written_to_history(rig):
     assert memory.body == "new private body\r\n"
     assert memory.fields["content_summary"] == "Summary"
     assert client.post(path + "/save", json=body, headers=headers).status_code == 400
-    assert [name for name, args in memory.calls].count("edit") == 1
+    assert [name for name, args in memory.calls].count("edit_memory_body") == 1
     changed = client.post(path + "/save", json={
         "action": "metadata", "draft": {"title": "New title"},
         "expected_revision": saved.json()["edit_context"]["revision"],

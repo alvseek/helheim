@@ -22,10 +22,10 @@ class Server:
         if not self.capable:
             return []
         return [
-            ToolInfo("get", "", {"properties": {"include_edit_context": {}}}, {}),
+            ToolInfo("get_memory", "", {"properties": {"include_edit_context": {}}}, {}),
             *[ToolInfo(tool, "", {"properties": {
                 "expected_revision": {}, "expected_tenant": {},
-            }}, {}) for tool in ("edit", "edit_metadata")],
+            }}, {}) for tool in ("edit_memory_body", "edit_memory_metadata")],
         ]
 
     def context(self):
@@ -44,14 +44,14 @@ class Server:
         self.calls.append((name, copy.deepcopy(arguments)))
         if self.fail:
             raise ClientError("connection interrupted")
-        if name == "get":
+        if name == "get_memory":
             result = self.pages.pop(0) if self.pages is not None else self.record()
-        elif name == "query":
+        elif name == "list_memories":
             result = [{"uuid": "record", **self.fields}]
         else:
             assert arguments["expected_tenant"] == "owner"
             assert arguments["expected_revision"] == self.revision
-            if name == "edit":
+            if name == "edit_memory_body":
                 assert arguments["old_string"] == self.body
                 self.body = arguments["new_string"]
             else:
@@ -73,11 +73,12 @@ def editor():
 async def test_old_server_is_read_only_and_browse_does_not_fetch_bodies():
     server, service = editor()
     rows = await service.browse("munnin")
-    assert rows[0]["uuid"] == "record" and [name for name, args in server.calls] == ["query"]
+    assert rows[0]["uuid"] == "record"
+    assert [name for name, args in server.calls] == ["list_memories"]
     server.capable = False
     with pytest.raises(MemoryEditError, match="lacks guarded"):
         await service.open("browser", "munnin", "record")
-    assert [name for name, args in server.calls] == ["query"]
+    assert [name for name, args in server.calls] == ["list_memories"]
 
 
 async def test_nonadjacent_source_positions_reconstruct_the_exact_body():
@@ -121,7 +122,7 @@ async def test_incomplete_or_mixed_pages_never_enable_save(corruption):
     with pytest.raises(MemoryEditError):
         await service.open("browser", "munnin", "record")
     assert not service.sessions
-    assert all(name == "get" for name, args in server.calls)
+    assert all(name == "get_memory" for name, args in server.calls)
 
 
 async def test_separate_saves_preserve_the_other_baseline_and_refuse_duplicate_revision():

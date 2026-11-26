@@ -44,7 +44,7 @@ class World:
         self.resume = asyncio.Event()
 
     async def get(self, cursor):
-        self.calls.append({"tool": "get", "cursor": cursor})
+        self.calls.append({"tool": "get_memory", "cursor": cursor})
         index = 0 if cursor is None else 1
         if cursor is not None and cursor != self.seed["pages"][0]["next_cursor"]:
             raise ValueError("Unexpected cursor")
@@ -91,15 +91,15 @@ def app_for(seed, owner):
     mcp = MCPServer("Owned captured-memory fixture", log_level="WARNING")
 
     @mcp.tool()
-    async def query(agent_id: str | None = None, record_type: str | None = None,
+    async def list_memories(agent_id: str | None = None, record_type: str | None = None,
                     project: str | None = None, include_archived: bool = False) -> Any:
-        world.calls.append({"tool": "query"})
+        world.calls.append({"tool": "list_memories"})
         # MCPServer flattens a bare list into separate text blocks; the wrapper
         # keeps the real metadata-listing shape for Helheim's browse contract.
-        return {"result": copy.deepcopy(seed["query"])}
+        return {"result": copy.deepcopy(seed["list_memories"])}
 
     @mcp.tool()
-    async def get(uuid: str, cursor: str | None = None, limit: int | None = None,
+    async def get_memory(uuid: str, cursor: str | None = None, limit: int | None = None,
                   include_edit_context: bool = False) -> Any:
         if uuid != seed["pages"][0]["uuid"]:
             return None
@@ -110,14 +110,15 @@ def app_for(seed, owner):
         return row
 
     @mcp.tool()
-    async def edit(uuid: str, old_string: str, new_string: str, replace_all: bool = False,
+    async def edit_memory_body(
+        uuid: str, old_string: str, new_string: str, replace_all: bool = False,
                    expected_revision: str | None = None,
                    expected_tenant: str | None = None) -> Any:
         world.writes += 1
         raise ValueError("Read-only capture fixture: unexpected write")
 
     @mcp.tool()
-    async def edit_metadata(uuid: str, title: str | None = None,
+    async def edit_memory_metadata(uuid: str, title: str | None = None,
                             expected_revision: str | None = None,
                             expected_tenant: str | None = None) -> Any:
         world.writes += 1
@@ -177,8 +178,9 @@ def app_for(seed, owner):
                 payload = json.loads(body)
                 args = payload.get("params", {}).get("arguments", {})
                 if (payload.get("method") == "tools/call"
-                        and payload.get("params", {}).get("name") == "get" and args.get("cursor")):
-                    world.calls.append({"tool": "get", "cursor": args["cursor"],
+                        and payload.get("params", {}).get("name") == "get_memory"
+                        and args.get("cursor")):
+                    world.calls.append({"tool": "get_memory", "cursor": args["cursor"],
                                         "fault": "HTTP 503"})
                     return await JSONResponse({"error": "controlled transport interruption"},
                                               status_code=503)(scope, receive, send)
