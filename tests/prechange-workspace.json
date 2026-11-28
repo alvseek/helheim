@@ -1,0 +1,33 @@
+{
+  "source_commit": "4586837",
+  "workspace": {
+    "id": "cfeb7345bae14db0a3accb7450372c58",
+    "version": 5,
+    "document_format": 2,
+    "repository": {
+      "key": "framework",
+      "owner": "fixture-owner",
+      "name": "agent-memory-system",
+      "base_ref": "main",
+      "catalog_root": ""
+    },
+    "base_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_oid": "0000000000000000000000000000000000000001",
+    "branch": "helheim/cfeb7345bae14db0a3accb7450372c58",
+    "branch_created": true,
+    "pull_number": 1,
+    "pull_url": "https://github.com/fixture-owner/agent-memory-system/pull/1",
+    "pending_action": null,
+    "pending_save": null,
+    "pending_pr": false
+  },
+  "saved_source": "@start region id=\"flow.read\"\nPre-change saved text\n@end region\n\n@start region id=\"flow.write\"\nDB write\n@end region\n",
+  "commit_info": {
+    "message": "Edit procedure source (7c39d54cc3a945a08cc15101a55f7766)",
+    "parents": [
+      {
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  }
+}

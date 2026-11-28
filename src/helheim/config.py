@@ -73,9 +73,10 @@ class Settings:
                     or issuer.username or issuer.password or issuer.query or issuer.fragment
                     or issuer.path.endswith("/")):
                 raise ValueError("issuer must use HTTPS")
-            if len(self.procedure_repositories) > 1:
-                raise ValueError("hosted procedure editing permits only one configured repository")
-
+            destinations = {(repo.owner.casefold(), repo.name.casefold())
+                            for repo in self.procedure_repositories}
+            if len(destinations) != len(self.procedure_repositories):
+                raise ValueError("hosted procedure repository destinations must be unique")
     @property
     def tokens_path(self) -> Path:
         return self.home / "tokens.json"

@@ -45,11 +45,10 @@ that response mode can still expose its query to an upstream proxy before the
 app rejects it. Real issuer behavior and the hosted deployment remain
 unverified; do not expose this development state to the internet.
 
-Hosted procedure editing permits zero or one server-configured repository; its
-selection is not a browser-controlled setting. The deployment operator must pin
-the intended repository in private deployment configuration and scope its
-dedicated credential to that repository. A separate disposable deployment can
-use the same configuration mechanism with its own repository and credential.
+Hosted procedure editing permits explicitly server-configured repositories; the
+browser can select among them but cannot add another destination. The deployment
+operator must configure the intended repositories privately and scope the
+dedicated credential to those repositories.
 The credential is supplied by the server through
 `HELHEIM_HOSTED_GITHUB_TOKEN`; an absent or invalid value disables GitHub
 operations rather than falling back to a local `gh` login. The credential is
@@ -185,6 +184,20 @@ uv run ruff check
 The integration marker reaches the configured real server only when its required
 token exists. Passing unit tests is not proof of a real GitHub write, an issuer
 exchange or browser behavior.
+
+The hosted multi-repository regression always runs with disposable synthetic
+sources and the owned GitHub CLI fixture. It also reopens a workspace saved by
+Helheim commit `4586837`. To corroborate it with pinned Hermod source checkouts,
+set `HELHEIM_TEST_PROJECT_SOURCE` and `HELHEIM_TEST_WIZARD_SOURCE` to their
+respective checkout roots, then run:
+
+```sh
+uv run pytest -q tests/test_hosted_multi_repository.py tests/test_hermod_sources.py
+```
+
+The optional source checks skip if either checkout is not supplied; they never
+write to those checkouts or to GitHub. Record the checked-out commit IDs with
+the results, because the paths alone do not identify a revision.
 
 The editor JavaScript regressions require Node.js 18+ and run automatically from
 pytest (with an explicit skip reason if Node is unavailable). Run them directly

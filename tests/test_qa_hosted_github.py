@@ -250,6 +250,19 @@ def test_wrong_repo_and_wrong_requests_never_start_a_process(git):
         assert git.calls() == []
 
 
+def test_hosted_multiple_repositories_keep_adapters_confined(git):
+    other = Repository("other", "fixture-owner", "fixture-repo")
+    with session(app_for(git, repositories=(REPO, other))) as client:
+        headers = csrf(client)
+        assert client.post("/procedures/workspaces", json={"repository": "unknown"},
+                           headers=headers).status_code == 400
+        for selected, forbidden in ((REPO, other), (other, REPO)):
+            adapter = client.app.state.workspaces.github(selected)
+            with pytest.raises(GitError):
+                adapter.request(forbidden.api + "/commits/main")
+        assert git.calls() == []
+
+
 def test_rejected_credential_does_not_retry_or_leak(git):
     git.faults(credential_refused=True)
     with session(app_for(git)) as client:
