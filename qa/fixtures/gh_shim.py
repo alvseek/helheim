@@ -117,12 +117,25 @@ def record_call(state, method, endpoint, payload):
 
 
 def main():
-    state, path = load()
+    root, path = load()
     method, endpoint, wants_input = parse(sys.argv[1:])
     if endpoint is None:
         emit(400, {"message": "fixture expected an api endpoint"})
         return
     payload = json.loads(sys.stdin.read()) if wants_input else None
+    state = root
+    if "repositories" in root:
+        if endpoint == "graphql":
+            name = payload.get("variables", {}).get("input", {}).get("branch", {}).get(
+                "repositoryNameWithOwner", ""
+            )
+        else:
+            parts = urlsplit(endpoint).path.lstrip("/").split("/")
+            name = "/".join(parts[1:3]) if parts[:1] == ["repos"] else ""
+        state = root["repositories"].get(name)
+        if state is None:
+            emit(404, {"message": "repository not present in fixture"})
+            return
     record_call(state, method, endpoint, payload)
     if state.get("hosted_probe"):
         token = os.environ.get("GH_TOKEN", "")
@@ -146,7 +159,7 @@ def main():
             ),
         }
         if state["faults"].get("credential_refused"):
-            persist(state, path)
+            persist(root, path)
             emit(401, {"message": "fixture credential refused"})
             return
 
@@ -249,7 +262,7 @@ def main():
     else:
         status, body = 404, {"message": "Not Found"}
 
-    persist(state, path)
+    persist(root, path)
     if fault == "lost":
         sys.exit(1)
     if fault == "unreadable":

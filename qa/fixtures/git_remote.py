@@ -146,6 +146,23 @@ class GitHubPeer:
     def state(self):
         return bench.read(self.state_path)
 
+    def configure_repositories(self, repositories):
+        """Install independent fixture repositories, keyed by owner/name."""
+        rows = {}
+        for repository, files in repositories:
+            state = initial_state()
+            state.update(owner=repository.owner, repo=repository.name,
+                         base_ref=repository.base_ref, hosted_probe=True)
+            state["blobs"] = {
+                hashlib.sha256(raw).hexdigest(): base64.b64encode(raw).decode("ascii")
+                for raw in files.values()
+            }
+            state["trees"][TREE] = {
+                path: hashlib.sha256(raw).hexdigest() for path, raw in files.items()
+            }
+            rows[f"{repository.owner}/{repository.name}"] = state
+        bench.write(self.state_path, {"repositories": rows})
+
     def update(self, change):
         state = self.state()
         change(state)
